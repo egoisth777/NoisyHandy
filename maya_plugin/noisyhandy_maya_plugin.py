@@ -54,7 +54,7 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
 
                 config.out_dir = 'D:/Projects/Upenn_CIS_6600/NoisyHandy/LYY/NoisyHandy/checkpoints'
                 config.exp_name = 'v1'
-                config.sample_timesteps = 40  # Reduce for faster generation
+                config.sample_timesteps = 30  # Reduce for faster generation
 
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                 print(f"device :{device}")
@@ -90,9 +90,21 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
             blend_factor = 0.5
             if argData.isFlagSet('blendFactor'):
                 blend_factor = argData.flagArgumentDouble('blendFactor', 0)
+
+            pattern1param = {}
+            if argData.isFlagSet('pattern1Params'):
+                pattern1_params_str = argData.flagArgumentString('pattern1Params', 0)
+                pattern1param = json.loads(pattern1_params_str)
+
+            pattern2param = {}
+            if argData.isFlagSet('pattern2Params'):
+                pattern2_params_str = argData.flagArgumentString('pattern2Params', 0)
+                pattern2param = json.loads(pattern2_params_str)
             
             print(pattern1)
+            print(pattern1param)
             print(pattern2)
+            print(pattern2param)
             print(mask_path)
             print(blend_factor)
 
@@ -100,23 +112,18 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
             H, W = 256, 256
 
             from inference.inference import Inference, dict2cond
-            from config.noise_config import noise_types, noise_aliases, ntype_to_params_map
             if pattern2:
                 print("into blending")
                 # Set up parameters for first noise pattern
                 c1 = {
                     'cls': pattern1,
-                    'sbsparams': {
-                        p: 0.5 for p in ntype_to_params_map.get(noise_aliases.get(pattern1, pattern1), [])
-                    }
+                    'sbsparams': pattern1param
                 }
                 
                 # Set up parameters for second noise pattern
                 c2 = {
                     'cls': pattern2,
-                    'sbsparams': {
-                        p: 0.5 for p in ntype_to_params_map.get(noise_aliases.get(pattern2, pattern2), [])
-                    }
+                    'sbsparams': pattern2param
                 }
 
                 with torch.no_grad():
@@ -135,9 +142,7 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
                 # Set up parameters for noise pattern
                 c = {
                     'cls': pattern1,
-                    'sbsparams': {
-                        p: 0.5 for p in ntype_to_params_map.get(noise_aliases.get(pattern1, pattern1), [])
-                    }
+                    'sbsparams': pattern1param
                 }
                 
                 # Generate the noise - use the standalone dict2cond function
@@ -190,6 +195,11 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
         syntax.addFlag('-p2', '-pattern2', OpenMaya.MSyntax.kString)
         syntax.addFlag('-ms', '-maskPath', OpenMaya.MSyntax.kString)
         syntax.addFlag('-bf', '-blendFactor', OpenMaya.MSyntax.kDouble)
+
+        # Add flags for parameter dictionaries
+        # Using string flags to pass JSON-encoded parameter dictionaries
+        syntax.addFlag('-p1p', '-pattern1Params', OpenMaya.MSyntax.kString)
+        syntax.addFlag('-p2p', '-pattern2Params', OpenMaya.MSyntax.kString)
 
         return syntax
 

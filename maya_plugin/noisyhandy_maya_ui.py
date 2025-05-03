@@ -2,8 +2,16 @@ import maya.cmds as cmds
 import maya.mel as mel
 import os
 import sys
+import json
 import tempfile
 from PIL import Image
+
+plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
+plugin_dir = os.path.dirname(plugin_path)
+root_dir = os.path.dirname(plugin_dir)
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
+from config.noise_config import noise_aliases, ntype_to_params_map
 
 class NoisyHandyUI:
     """UI for the NoisyHandy Maya plugin"""
@@ -13,10 +21,12 @@ class NoisyHandyUI:
     
     NOISE_PATTERNS = ["damas", "galvanic", "cells1", "cells4", "perlin", "gaussian", "voro", "liquid", "fibers", "micro", "rust"]
     MASK_DIR = "D:/Projects/Upenn_CIS_6600/NoisyHandy/LYY/NoisyHandy/inference/masks"
-    MASK_SHAPES = [os.path.splitext(f)[0] for f in os.listdir(MASK_DIR) if f.endswith('.png')]
+    MASK_SHAPES = [os.path.splitext(f)[0] for f in os.listdir(MASK_DIR) if f.endswith('.png') and not f.startswith('tmp')]
 
     print(NOISE_PATTERNS)
     print(MASK_SHAPES)
+
+    NOISE_PARAMETERS = {}
 
     # Paths for preview images (to be populated)
     PREVIEW_IMAGES_PATH = tempfile.gettempdir()
@@ -42,6 +52,80 @@ class NoisyHandyUI:
         self.pattern2_image = None
         self.blend_map_image = None
         self.output_image = None
+
+        # Parameter UI elements and values
+        self.pattern1_params_container = None
+        self.pattern2_params_container = None
+        self.pattern1_param_elements = {}
+        self.pattern2_param_elements = {}
+        self.pattern1_param_values = {}
+        self.pattern2_param_values = {}
+
+        for noise_pattern in self.NOISE_PATTERNS:
+            self.NOISE_PARAMETERS[noise_pattern] = ntype_to_params_map.get(noise_aliases.get(noise_pattern, noise_pattern), [])
+        print(self.NOISE_PARAMETERS)
+    
+    def create_parameter_controls(self, pattern, parent_container, param_elements, param_values):
+        """Create parameter sliders for a given noise pattern"""
+        # Remove existing parameter controls
+        if cmds.layout(parent_container, exists=True):
+            children = cmds.layout(parent_container, query=True, childArray=True)
+            if children:
+                for child in children:
+                    cmds.deleteUI(child)
+
+        # Clear existing UI elements
+        param_elements.clear()
+
+        # Clear existing Parameter values
+        param_values.clear()
+        
+        # Create new parameter controls
+        for param in self.NOISE_PARAMETERS[pattern]:
+            param_values[param] = 0.5
+            frame = cmds.frameLayout(
+                label=param.capitalize(),
+                collapsable=False,
+                borderStyle="etchedOut",
+                marginWidth=5,
+                marginHeight=5,
+                labelVisible=True,
+                height=50,
+                parent=parent_container
+            )
+            
+            # Create a row for the parameter slider
+            row = cmds.rowLayout(
+                numberOfColumns=3,
+                columnWidth3=(20, 250, 80),
+                adjustableColumn=2,
+                columnAlign3=["left", "center", "right"],
+                parent=frame
+            )
+            
+            cmds.text(label="0", width=20)
+            
+            slider = cmds.floatSlider(
+                min=0.0,
+                max=1.0,
+                value=param_values[param],
+                step=0.01,
+                changeCommand=lambda value, p=param, pattern=pattern: self.on_parameter_change(pattern, p, value),
+                width=250,
+                height=20
+            )
+            
+            value_text = cmds.text(label=f"{param_values[param]:.2f}", width=80)
+            
+            cmds.setParent('..')  # Back to frame
+            
+            # Store UI elements for later reference
+            param_elements[param] = {
+                'slider': slider,
+                'text': value_text
+            }
+            
+        cmds.setParent('..')  # Back to container
         
     def create_ui(self):
         """Create the UI window"""
@@ -86,6 +170,19 @@ class NoisyHandyUI:
         for pattern in self.NOISE_PATTERNS:
             cmds.menuItem(label=pattern)
         cmds.setParent('..')
+
+        # Pattern 1 parameters container
+        self.pattern1_params_container = cmds.columnLayout(
+            adjustableColumn=True,
+            rowSpacing=0
+        )
+        self.create_parameter_controls(
+            self.pattern1_value, 
+            self.pattern1_params_container, 
+            self.pattern1_param_elements, 
+            self.pattern1_param_values
+        )
+        cmds.setParent('..')
         
         # Pattern 2 selection
         cmds.frameLayout(
@@ -105,6 +202,19 @@ class NoisyHandyUI:
         )
         for pattern in self.NOISE_PATTERNS:
             cmds.menuItem(label=pattern)
+        cmds.setParent('..')
+
+        # Pattern 2 parameters container
+        self.pattern2_params_container = cmds.columnLayout(
+            adjustableColumn=True,
+            rowSpacing=0
+        )
+        self.create_parameter_controls(
+            self.pattern2_value, 
+            self.pattern2_params_container, 
+            self.pattern2_param_elements, 
+            self.pattern2_param_values
+        )
         cmds.setParent('..')
         
         # Mask Shape selection
@@ -126,6 +236,14 @@ class NoisyHandyUI:
         for shape in self.MASK_SHAPES:
             cmds.menuItem(label=shape)
         cmds.setParent('..')
+
+        # Mask Upload Button
+        cmds.button(
+            label="Upload Custom Mask...",
+            command=self.on_mask_file_upload,
+            height=30,
+            backgroundColor=[0.7, 0.7, 0.7]
+        )
         
         # Blend factor frame
         cmds.frameLayout(
@@ -269,12 +387,15 @@ class NoisyHandyUI:
         im = im.resize(size, Image.Resampling.LANCZOS)
         im.save(output_path)
 
-    def update_single_noise_preview(self, pattern, pattern_image, size=(350, 350)):
+    def update_single_noise_preview(self, pattern, pattern_image, params, size=(350, 350)):
+        print(params)
         try:
             print("into single noise preview")
             result = cmds.noisyHandyInference(
                 pattern1 = pattern,
+                pattern1Params = json.dumps(params),
                 pattern2 = '',
+                pattern2Params = json.dumps({}),
                 maskPath = '',
                 blendFactor = 0
             )
@@ -291,12 +412,66 @@ class NoisyHandyUI:
     def on_pattern1_change(self, value):
         """Handler for pattern 1 selection change"""
         self.pattern1_value = value
-        self.update_single_noise_preview(value, self.pattern1_image)
+        self.create_parameter_controls(
+            value, 
+            self.pattern1_params_container, 
+            self.pattern1_param_elements, 
+            self.pattern1_param_values,
+        )
+        self.update_single_noise_preview(value, self.pattern1_image, self.pattern1_param_values)
     
     def on_pattern2_change(self, value):
         """Handler for pattern 2 selection change"""
         self.pattern2_value = value
-        self.update_single_noise_preview(value, self.pattern2_image)
+        self.create_parameter_controls(
+            value, 
+            self.pattern2_params_container, 
+            self.pattern2_param_elements, 
+            self.pattern2_param_values,
+        )
+        self.update_single_noise_preview(value, self.pattern2_image, self.pattern2_param_values)
+    
+    def on_parameter_change(self, pattern, parameter, value):
+        """Handler for parameter slider changes"""
+        if pattern == self.pattern1_value:
+            param_values = self.pattern1_param_values
+            param_elements = self.pattern1_param_elements
+            image = self.pattern1_image
+        else:
+            param_values = self.pattern2_param_values
+            param_elements = self.pattern2_param_elements
+            image = self.pattern2_image
+        
+        param_values[parameter] = float(value)
+        
+        # Update the text display
+        cmds.text(param_elements[parameter]['text'], edit=True, label=f"{value:.2f}")
+        
+        # Update the preview
+        self.update_single_noise_preview(pattern, image, param_values)
+    
+    def on_mask_file_upload(self, *args):
+        file_path = cmds.fileDialog2(fileMode=1, caption="Select a Mask Image", fileFilter="Image Files (*.png)", okCaption="Load")
+        if file_path:
+            selected_path = file_path[0]
+            if selected_path.endswith('.png'):
+                # Copy the file to MASK_DIR
+                dest_name = os.path.basename(selected_path)
+                dest_path = os.path.join(self.MASK_DIR, dest_name)
+                try:
+                    if not os.path.exists(dest_path):
+                        cmds.sysFile(selected_path, copy=dest_path)
+                    # Update mask list and dropdown
+                    if dest_name[:-4] not in self.MASK_SHAPES:
+                        self.MASK_SHAPES.append(dest_name[:-4])
+                        cmds.menuItem(label=dest_name[:-4], parent=self.mask_shape_menu)
+                    self.mask_shape_value = dest_name[:-4]
+                    cmds.optionMenu(self.mask_shape_menu, edit=True, value=self.mask_shape_value)
+                    self.on_mask_shape_change(self.mask_shape_value)
+                except Exception as e:
+                    cmds.warning("Failed to load mask: " + str(e))
+            else:
+                cmds.warning("Only PNG files are supported.")
     
     def on_mask_shape_change(self, value):
         """Handler for mask shape selection change"""
@@ -328,7 +503,9 @@ class NoisyHandyUI:
             print("into blending noise preview")
             result = cmds.noisyHandyInference(
                 pattern1=self.pattern1_value,
+                pattern1Params = json.dumps(self.pattern1_param_values),
                 pattern2=self.pattern2_value,
+                pattern2Params = json.dumps(self.pattern2_param_values),
                 maskPath=self.mask_preview_path,
                 blendFactor=self.blend_factor
             )
