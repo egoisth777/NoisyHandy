@@ -1,5 +1,5 @@
-################################################################### IMPORT ############################################################################
-#######################################################################################################################################################
+################################################################### IMPORT #######
+##################################################################################
 import maya.cmds as cmds
 import maya.mel as mel
 import os
@@ -11,7 +11,7 @@ import tempfile
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Get paths from the plugin itself
-from noisyhandy_maya_plugin import PATHS
+from noisyhandy_config import PATHS
 
 # Configure PIL
 try:
@@ -31,7 +31,7 @@ except ImportError:
 # Now import project-specific modules
 try:
     from config.noise_config import noise_aliases, ntype_to_params_map
-    from noisyhandy_node_generator import (
+    from maya_plugin.noisyhandy_maya_noisenode import (
         create_perlin_example,
         create_animated_noise_example,
         create_terrain_example,
@@ -43,20 +43,10 @@ except ImportError:
     # Fallback defaults
     noise_aliases = {}
     ntype_to_params_map = {}
-################################################################### END IMPORT ########################################################################
-#######################################################################################################################################################
+##################################################################################
+################################################################### END IMPORT ###
+##################################################################################
 
-
-########################################################################################################################################################
-# STATIC HELPERS #######################################################################################################################################
-
-def get_root_path():
-    """
-    Return the Path to the root directory
-    @return a string value representing the parent directory of the plugin
-    """
-    return PATHS['root_dir']
-#######################################################################################################################################################
 
 
 # UI CLASS COMPONENT
