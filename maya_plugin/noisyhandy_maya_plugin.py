@@ -359,7 +359,16 @@ def uninitializePlugin(mobject):
     mplugin = OpenMayaMPx.MFnPlugin(mobject)
     
     try:
+        # First deregister the command
         mplugin.deregisterCommand(NoisyHandyInferenceCmd.command_name)
+        
+        # Clean up UI elements
+        try:
+            import noisyhandy_maya_ui
+            noisyhandy_maya_ui.cleanup_ui()
+        except Exception as e:
+            OpenMaya.MGlobal.displayWarning(f"Error cleaning up UI: {str(e)}")
+        
         OpenMaya.MGlobal.displayInfo(f"{PLUGIN_NAME} v{PLUGIN_VERSION} unloaded successfully")
     except:
         sys.stderr.write(f"Failed to unregister command: {NoisyHandyInferenceCmd.command_name}\n")

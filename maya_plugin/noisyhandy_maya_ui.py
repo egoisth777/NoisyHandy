@@ -560,7 +560,9 @@ class NoisyHandyUI:
         cmds.text(self.blend_value_text, edit=True, label=f"{self.blend_factor:.2f}")
     
     def on_generate(self, *args):
-        """Handler for generate button click"""
+        """
+        Handler for generating button click
+        """
         try:
             # Call the plugin command with the selected parameters
             print("into blending noise preview")
@@ -610,6 +612,31 @@ class NoisyHandyUI:
                 button=["OK"],
                 defaultButton="OK"
             )
+
+def cleanup_ui():
+    """Remove all UI elements created by the plugin"""
+    # Close the main window if it exists
+    if cmds.window(NoisyHandyUI.WINDOW_NAME, exists=True):
+        cmds.deleteUI(NoisyHandyUI.WINDOW_NAME)
+        
+    # Remove the menu if it exists
+    if cmds.menu('NoisyHandyMenu', exists=True):
+        cmds.deleteUI('NoisyHandyMenu')
+        
+    # Clean up any temporary files that might have been created
+    mask_dir = os.path.join(get_root_path(), "inference", "masks")
+    try:
+        # Remove temporary files
+        for tmp_file in os.listdir(mask_dir):
+            if tmp_file.startswith('tmp_'):
+                try:
+                    os.remove(os.path.join(mask_dir, tmp_file))
+                except:
+                    pass
+    except Exception as e:
+        cmds.warning(f"Failed to clean up temporary files: {str(e)}")
+    
+    print("NoisyHandy UI elements have been removed")
 
 def create_menu():
     """Create a menu in Maya with NoisyHandy options"""
