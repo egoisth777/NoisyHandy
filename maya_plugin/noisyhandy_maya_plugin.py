@@ -22,6 +22,10 @@ import noisyhandy_maya_ui
 PLUGIN_NAME = "NoisyHandyPlugin"
 PLUGIN_VERSION = "1.0.1"
 
+# Node Definitions
+NOISY_HANDY_NODE_TYPE = "noisyHandyNode"
+NOISY_HANDY_NODE_ID = OpenMaya.MTypeId(0x00134567)  # Unique type ID for our node
+
 # Centralized path management
 def setup_paths():
     """
@@ -30,8 +34,12 @@ def setup_paths():
     """
     paths = {}
     
-    # Get the plugin path
-    plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
+    # Get the plugin path - use __file__ if available, otherwise use Maya's API
+    if '__file__' in globals():
+        plugin_path = __file__
+    else:
+        plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
+        
     plugin_dir = os.path.dirname(plugin_path)
     root_dir = os.path.dirname(plugin_dir)
     
@@ -60,7 +68,10 @@ def setup_paths():
     
     return paths
 
+# Initialize paths
+PATHS = setup_paths()
 
+# Initialize Dependencies
 def setup_dependencies() -> bool:
     """
     Ensure that required Python packages (numpy, PIL) are installed,
@@ -104,11 +115,7 @@ def setup_dependencies() -> bool:
         print("<<<<<<<<<<<<<<<<<<<<<<<<<<")
         return False
 
-# Initialize paths
-PATHS = setup_paths()
-
-# Initialize Dependencies
-setup_dependencies()
+HAS_DEPENDENCIES = setup_dependencies()
 
 ##################################################################################################################################
 ##################################################################################################################################
@@ -204,7 +211,10 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
         Execute the command
         """
         try:
-            print("into doit")
+            
+            print()
+            print(">=========================>")
+            print("INFERENCE COMMAND EXECUTED")
             # Parse arguments
             argData = OpenMaya.MArgParser(self.syntax(), args)
             
@@ -351,6 +361,460 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
 
         return syntax
 
+# NoisyHandy Node Implementation
+class NoisyHandyNode(OpenMayaMPx.MPxNode):
+    """
+    Maya node that represents a NoisyHandy generated noise texture
+    This node can be connected to other Maya nodes like a standard noise node
+    """
+    # Class attributes for the node
+    id = NOISY_HANDY_NODE_ID
+    typeName = NOISY_HANDY_NODE_TYPE
+    
+    # Attribute handles (will be populated in initialize)
+    outColorAttr = OpenMaya.MObject()
+    outAlphaAttr = OpenMaya.MObject()
+    patternAttr = OpenMaya.MObject()
+    pattern2Attr = OpenMaya.MObject()
+    blendFactorAttr = OpenMaya.MObject()
+    scaleAttr = OpenMaya.MObject()
+    offsetAttr = OpenMaya.MObject()
+    timeAttr = OpenMaya.MObject()
+    parameterMapAttr = OpenMaya.MObject()
+    texturePathAttr = OpenMaya.MObject()
+    
+    # UV Input
+    uvCoordAttr = OpenMaya.MObject()
+    
+    # Animation related
+    animateNoiseAttr = OpenMaya.MObject()
+    animationSpeedAttr = OpenMaya.MObject()
+    
+    # Texture resolution
+    resolutionAttr = OpenMaya.MObject()
+    
+    # Noise parameters - directly on the node
+    noiseFrequencyAttr = OpenMaya.MObject()
+    noiseOctavesAttr = OpenMaya.MObject()
+    noisePersistenceAttr = OpenMaya.MObject()
+    
+    # Texture file path
+    texturePath = ""
+    pattern1Value = ""
+    pattern2Value = ""
+    pattern1Params = {}
+    pattern2Params = {}
+    
+    def __init__(self):
+        OpenMayaMPx.MPxNode.__init__(self)
+        # Cache for generated texture data
+        self.textureData = None
+        self.lastParams = {}
+    
+    def loadTexture(self, path):
+        """Load texture from file and cache it"""
+        if not path or not os.path.exists(path):
+            return None
+        
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            img_array = np.array(img)
+            return img_array
+        except Exception as e:
+            print(f"Error loading texture: {str(e)}")
+            return None
+    
+    def sampleTexture(self, textureData, u, v):
+        """
+        Sample texture at given UV coordinates
+        Returns RGB tuple normalized to 0-1
+        """
+        if textureData is None:
+            return (0.5, 0.5, 0.5)  # Default gray
+            
+        try:
+            # Get texture dimensions
+            height, width = textureData.shape[:2]
+            
+            # Convert UV (0-1) to pixel coordinates
+            x = int((u % 1.0) * (width - 1))
+            y = int((1.0 - (v % 1.0)) * (height - 1))  # Flip Y for proper UV orientation
+            
+            # Sample the texture
+            pixel = textureData[y, x]
+            
+            # Normalize to 0-1 range
+            if len(pixel) >= 3:
+                return (pixel[0] / 255.0, pixel[1] / 255.0, pixel[2] / 255.0)
+            else:
+                # Grayscale image
+                gray = pixel / 255.0
+                return (gray, gray, gray)
+        except Exception as e:
+            print(f"Error sampling texture: {str(e)}")
+            return (0.5, 0.5, 0.5)
+    
+    def compute(self, plug, dataBlock):
+        """
+        Compute the output values based on the input values
+        This is called by Maya when it needs to evaluate the node
+        """
+        if plug == NoisyHandyNode.outColorAttr or plug == NoisyHandyNode.outAlphaAttr:
+            
+            # Get values from input attributes
+            timeHandle = dataBlock.inputValue(NoisyHandyNode.timeAttr)
+            time = timeHandle.asTime().asUnits(OpenMaya.MTime.kSeconds)
+            
+            scaleHandle = dataBlock.inputValue(NoisyHandyNode.scaleAttr)
+            scale = scaleHandle.asFloat3()
+            
+            offsetHandle = dataBlock.inputValue(NoisyHandyNode.offsetAttr)
+            offset = offsetHandle.asFloat3()
+            
+            blendFactorHandle = dataBlock.inputValue(NoisyHandyNode.blendFactorAttr)
+            blendFactor = blendFactorHandle.asFloat()
+            
+            patternHandle = dataBlock.inputValue(NoisyHandyNode.patternAttr)
+            pattern = patternHandle.asString()
+            
+            pattern2Handle = dataBlock.inputValue(NoisyHandyNode.pattern2Attr)
+            pattern2 = pattern2Handle.asString()
+            
+            texturePathHandle = dataBlock.inputValue(NoisyHandyNode.texturePathAttr)
+            texturePath = texturePathHandle.asString()
+            
+            # Get animation options
+            animateNoiseHandle = dataBlock.inputValue(NoisyHandyNode.animateNoiseAttr)
+            animateNoise = animateNoiseHandle.asBool()
+            
+            animationSpeedHandle = dataBlock.inputValue(NoisyHandyNode.animationSpeedAttr)
+            animationSpeed = animationSpeedHandle.asFloat()
+            
+            # Get noise parameters
+            noiseFrequencyHandle = dataBlock.inputValue(NoisyHandyNode.noiseFrequencyAttr)
+            noiseFrequency = noiseFrequencyHandle.asFloat()
+            
+            noiseOctavesHandle = dataBlock.inputValue(NoisyHandyNode.noiseOctavesAttr)
+            noiseOctaves = noiseOctavesHandle.asInt()
+            
+            noisePersistenceHandle = dataBlock.inputValue(NoisyHandyNode.noisePersistenceAttr)
+            noisePersistence = noisePersistenceHandle.asFloat()
+            
+            # Get UV coordinates from input or from local position
+            uvCoordHandle = dataBlock.inputValue(NoisyHandyNode.uvCoordAttr)
+            uv = uvCoordHandle.asFloat2()
+            
+            # Apply scaling and offset to UV
+            u = (uv[0] * scale[0]) + offset[0]
+            v = (uv[1] * scale[1]) + offset[1]
+            
+            # Apply time offset for animation if enabled
+            if animateNoise:
+                offset_time = time * animationSpeed
+                # Modify UV based on time for animation
+                u += offset_time * 0.1
+                v += offset_time * 0.05
+            
+            # Access output handles
+            outColorHandle = dataBlock.outputValue(NoisyHandyNode.outColorAttr)
+            outAlphaHandle = dataBlock.outputValue(NoisyHandyNode.outAlphaAttr)
+            
+            # If we have a texture path, use that as our output color
+            if texturePath and os.path.exists(texturePath):
+                # Load texture if not cached or parameters changed
+                paramHash = f"{texturePath}_{u}_{v}_{scale[0]}_{scale[1]}_{offset[0]}_{offset[1]}_{time}"
+                if self.textureData is None or self.lastParams.get('hash') != paramHash:
+                    self.textureData = self.loadTexture(texturePath)
+                    self.lastParams['hash'] = paramHash
+                
+                if self.textureData is not None:
+                    # Sample texture at UV coordinates
+                    r, g, b = self.sampleTexture(self.textureData, u, v)
+                    
+                    # Set output color
+                    outColor = OpenMaya.MFloatVector(r, g, b)
+                    outColorHandle.setMFloatVector(outColor)
+                    
+                    # Calculate luminance for alpha
+                    alpha = (r * 0.299 + g * 0.587 + b * 0.114)
+                    outAlphaHandle.setFloat(alpha)
+                else:
+                    # Default if texture can't be loaded
+                    outColorHandle.setMFloatVector(OpenMaya.MFloatVector(0.5, 0.5, 0.5))
+                    outAlphaHandle.setFloat(1.0)
+            else:
+                # No texture, generate procedural noise based on attributes
+                # This is a simple noise implementation that could be improved
+                import math
+                
+                # Simple Perlin-like noise function (simplified for example)
+                noise_val = math.sin(u * noiseFrequency * 10) * math.cos(v * noiseFrequency * 10) * 0.5 + 0.5
+                
+                # Use noise parameters to adjust the output
+                noise_val = math.pow(noise_val, noisePersistence)
+                
+                # Set output color based on noise value
+                outColor = OpenMaya.MFloatVector(noise_val, noise_val, noise_val)
+                outColorHandle.setMFloatVector(outColor)
+                outAlphaHandle.setFloat(noise_val)
+                
+            # Mark the outputs as clean
+            outColorHandle.setClean()
+            outAlphaHandle.setClean()
+            
+            return OpenMayaMPx.MPxStatus.kSuccess
+            
+        return OpenMayaMPx.MPxStatus.kUnknownParameter
+    
+    @staticmethod
+    def nodeCreator():
+        """Create an instance of the node"""
+        return OpenMayaMPx.asMPxPtr(NoisyHandyNode())
+    
+    @staticmethod
+    def nodeInitializer():
+        """Initialize the node attributes"""
+        # Create function sets for attribute creation
+        nAttr = OpenMaya.MFnNumericAttribute()
+        tAttr = OpenMaya.MFnTypedAttribute()
+        uAttr = OpenMaya.MFnUnitAttribute()
+        
+        # Create output color attribute (RGB)
+        NoisyHandyNode.outColorAttr = nAttr.createColor("outColor", "oc")
+        nAttr.setWritable(False)
+        nAttr.setStorable(False)
+        nAttr.setKeyable(False)
+        
+        # Create output alpha attribute (float)
+        NoisyHandyNode.outAlphaAttr = nAttr.create("outAlpha", "oa", OpenMaya.MFnNumericData.kFloat, 1.0)
+        nAttr.setWritable(False)
+        nAttr.setStorable(False)
+        nAttr.setKeyable(False)
+        
+        # Create pattern attribute (string)
+        NoisyHandyNode.patternAttr = tAttr.create("pattern", "pat", OpenMaya.MFnData.kString)
+        tAttr.setKeyable(True)
+        tAttr.setStorable(True)
+        
+        # Create pattern2 attribute (string)
+        NoisyHandyNode.pattern2Attr = tAttr.create("pattern2", "pat2", OpenMaya.MFnData.kString)
+        tAttr.setKeyable(True)
+        tAttr.setStorable(True)
+        
+        # Create blend factor attribute (float)
+        NoisyHandyNode.blendFactorAttr = nAttr.create("blendFactor", "bf", OpenMaya.MFnNumericData.kFloat, 0.5)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        nAttr.setMin(0.0)
+        nAttr.setMax(1.0)
+        
+        # Create scale attribute (vector)
+        NoisyHandyNode.scaleAttr = nAttr.create("scale", "sc", OpenMaya.MFnNumericData.k3Float)
+        nAttr.setDefault(1.0, 1.0, 1.0)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        
+        # Create offset attribute (vector)
+        NoisyHandyNode.offsetAttr = nAttr.create("offset", "of", OpenMaya.MFnNumericData.k3Float)
+        nAttr.setDefault(0.0, 0.0, 0.0)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        
+        # Create time attribute
+        NoisyHandyNode.timeAttr = uAttr.create("time", "tm", OpenMaya.MFnUnitAttribute.kTime, 0.0)
+        uAttr.setKeyable(True)
+        uAttr.setStorable(True)
+        
+        # Create texture path attribute (string)
+        NoisyHandyNode.texturePathAttr = tAttr.create("texturePath", "tp", OpenMaya.MFnData.kString)
+        tAttr.setKeyable(False)
+        tAttr.setStorable(True)
+        tAttr.setHidden(False)  # Make visible in UI
+        
+        # Create UV coordinate attribute (float2)
+        NoisyHandyNode.uvCoordAttr = nAttr.create("uvCoord", "uv", OpenMaya.MFnNumericData.k2Float)
+        nAttr.setDefault(0.0, 0.0)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        
+        # Create animation controls
+        NoisyHandyNode.animateNoiseAttr = nAttr.create("animateNoise", "an", OpenMaya.MFnNumericData.kBoolean, False)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        
+        NoisyHandyNode.animationSpeedAttr = nAttr.create("animationSpeed", "as", OpenMaya.MFnNumericData.kFloat, 1.0)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        nAttr.setMin(0.0)
+        
+        # Create noise parameter attributes
+        NoisyHandyNode.noiseFrequencyAttr = nAttr.create("noiseFrequency", "nf", OpenMaya.MFnNumericData.kFloat, 1.0)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        nAttr.setMin(0.01)
+        nAttr.setMax(10.0)
+        
+        NoisyHandyNode.noiseOctavesAttr = nAttr.create("noiseOctaves", "no", OpenMaya.MFnNumericData.kInt, 4)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        nAttr.setMin(1)
+        nAttr.setMax(10)
+        
+        NoisyHandyNode.noisePersistenceAttr = nAttr.create("noisePersistence", "np", OpenMaya.MFnNumericData.kFloat, 0.5)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        nAttr.setMin(0.0)
+        nAttr.setMax(1.0)
+        
+        # Create resolution attribute for the noise texture
+        NoisyHandyNode.resolutionAttr = nAttr.create("resolution", "res", OpenMaya.MFnNumericData.kInt, 256)
+        nAttr.setKeyable(True)
+        nAttr.setStorable(True)
+        nAttr.setMin(64)
+        nAttr.setMax(1024)
+        
+        # Add attributes to the node
+        NoisyHandyNode.addAttribute(NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.patternAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.pattern2Attr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.blendFactorAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.scaleAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.offsetAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.timeAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.texturePathAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.uvCoordAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.animateNoiseAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.animationSpeedAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.noiseFrequencyAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.noiseOctavesAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.noisePersistenceAttr)
+        NoisyHandyNode.addAttribute(NoisyHandyNode.resolutionAttr)
+        
+        # Set up attribute dependencies for compute
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.patternAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.patternAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.pattern2Attr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.pattern2Attr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.blendFactorAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.blendFactorAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.scaleAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.scaleAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.offsetAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.offsetAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.timeAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.timeAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.texturePathAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.texturePathAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.uvCoordAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.uvCoordAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.animateNoiseAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.animateNoiseAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.animationSpeedAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.animationSpeedAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.noiseFrequencyAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.noiseFrequencyAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.noiseOctavesAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.noiseOctavesAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.noisePersistenceAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.noisePersistenceAttr, NoisyHandyNode.outAlphaAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.resolutionAttr, NoisyHandyNode.outColorAttr)
+        NoisyHandyNode.attributeAffects(NoisyHandyNode.resolutionAttr, NoisyHandyNode.outAlphaAttr)
+
+# Create Node Command Implementation
+class CreateNoisyHandyNodeCmd(OpenMayaMPx.MPxCommand):
+    """
+    Command to create a NoisyHandy node with texture and parameters from the UI
+    """
+    command_name = "createNoisyHandyNode"
+    
+    def __init__(self):
+        OpenMayaMPx.MPxCommand.__init__(self)
+        self.node_name = ""
+    
+    def doIt(self, args):
+        """Execute the command"""
+        try:
+            # Parse arguments
+            argData = OpenMaya.MArgParser(self.syntax(), args)
+            
+            # Get parameters
+            texture_path = ""
+            if argData.isFlagSet('texturePath'):
+                texture_path = argData.flagArgumentString('texturePath', 0)
+            
+            pattern = "damas"
+            if argData.isFlagSet('pattern'):
+                pattern = argData.flagArgumentString('pattern', 0)
+            
+            pattern2 = ""
+            if argData.isFlagSet('pattern2'):
+                pattern2 = argData.flagArgumentString('pattern2', 0)
+            
+            blend_factor = 0.5
+            if argData.isFlagSet('blendFactor'):
+                blend_factor = argData.flagArgumentDouble('blendFactor', 0)
+            
+            # Create the node
+            node_name = cmds.createNode(NOISY_HANDY_NODE_TYPE, name="noisyHandyNode#")
+            
+            # Set values on the node
+            cmds.setAttr(node_name + ".pattern", pattern, type="string")
+            if pattern2:
+                cmds.setAttr(node_name + ".pattern2", pattern2, type="string")
+            cmds.setAttr(node_name + ".blendFactor", blend_factor)
+            
+            if texture_path and os.path.exists(texture_path):
+                cmds.setAttr(node_name + ".texturePath", texture_path, type="string")
+            
+            # Store the node name for undoIt/redoIt
+            self.node_name = node_name
+            
+            # Set the result to the node name
+            self.setResult(node_name)
+            
+            OpenMaya.MGlobal.displayInfo(f"Created NoisyHandy node: {node_name}")
+            
+        except Exception as e:
+            OpenMaya.MGlobal.displayError(f"Error creating NoisyHandy node: {str(e)}")
+            raise
+    
+    def undoIt(self):
+        """Undo the command"""
+        if self.node_name:
+            try:
+                cmds.delete(self.node_name)
+            except:
+                pass
+    
+    def redoIt(self):
+        """Redo the command"""
+        # Implementation would recreate the node with the same parameters
+        pass
+    
+    def isUndoable(self):
+        """Indicate that this command is undoable"""
+        return True
+    
+    @staticmethod
+    def cmdCreator():
+        """Create an instance of the command"""
+        return OpenMayaMPx.asMPxPtr(CreateNoisyHandyNodeCmd())
+    
+    @staticmethod
+    def syntaxCreator():
+        """Create the command syntax object"""
+        syntax = OpenMaya.MSyntax()
+        
+        # Add flags for the command
+        syntax.addFlag('-tp', '-texturePath', OpenMaya.MSyntax.kString)
+        syntax.addFlag('-p', '-pattern', OpenMaya.MSyntax.kString)
+        syntax.addFlag('-p2', '-pattern2', OpenMaya.MSyntax.kString)
+        syntax.addFlag('-bf', '-blendFactor', OpenMaya.MSyntax.kDouble)
+        
+        return syntax
+
 # Plugin initialization and cleanup
 def initializePlugin(mobject):
     """
@@ -366,11 +830,25 @@ def initializePlugin(mobject):
             NoisyHandyInferenceCmd.syntaxCreator
         )
         
+        mplugin.registerNode(
+            NoisyHandyNode.typeName,
+            NoisyHandyNode.id,
+            NoisyHandyNode.nodeCreator,
+            NoisyHandyNode.nodeInitializer,
+            OpenMayaMPx.MPxNode.kDependNode
+        )
+        
+        mplugin.registerCommand(
+            CreateNoisyHandyNodeCmd.command_name,
+            CreateNoisyHandyNodeCmd.cmdCreator,
+            CreateNoisyHandyNodeCmd.syntaxCreator
+        )
+        
         # Create the UI when plugin is loaded
         try:
             import noisyhandy_maya_ui
-            noisyhandy_maya_ui.create_menu()
-            print("NoisyHandy UI menu created successfully")
+            noisyhandy_maya_ui.create_menu()  # Create menu instead of showing UI directly
+            print("NoisyHandy menu created successfully")
         except Exception as e:
             OpenMaya.MGlobal.displayWarning(f"Error creating UI menu: {str(e)}")
             
@@ -383,12 +861,97 @@ def uninitializePlugin(mobject):
     """
     Clean up when the plugin is unloaded
     """
-
     mplugin = OpenMayaMPx.MFnPlugin(mobject)
     
     try:
-        # First deregister the command
+        # First find and clean up any existing noise nodes
+        try:
+            # Find all NoisyHandy nodes
+            noisy_nodes = cmds.ls(type=NOISY_HANDY_NODE_TYPE)
+            
+            if noisy_nodes and len(noisy_nodes) > 0:
+                print(f"Found {len(noisy_nodes)} NoisyHandy nodes to clean up.")
+                
+                # Get connected place2d nodes
+                place2d_nodes = []
+                for node in noisy_nodes:
+                    # Find any connected place2dTexture nodes
+                    connected_nodes = cmds.listConnections(node, type="place2dTexture")
+                    if connected_nodes:
+                        place2d_nodes.extend(connected_nodes)
+                
+                # Get all the connected shading networks to clean up later
+                connected_shaders = []
+                connected_sg_sets = []
+                
+                for node in noisy_nodes:
+                    connections = cmds.listConnections(f"{node}.outColor") or []
+                    for conn in connections:
+                        conn_type = cmds.nodeType(conn)
+                        if conn_type in ["lambert", "blinn", "phong", "standardSurface", "displacementShader", "bump3d"]:
+                            connected_shaders.append(conn)
+                        elif conn_type == "shadingEngine":
+                            connected_sg_sets.append(conn)
+                
+                # Delete the NoisyHandy nodes - this disconnects them from the network
+                cmds.delete(noisy_nodes)
+                print(f"Deleted {len(noisy_nodes)} NoisyHandy nodes.")
+                
+                # Clean up place2d nodes that were connected to our nodes
+                if place2d_nodes:
+                    # Remove duplicates
+                    place2d_nodes = list(set(place2d_nodes))
+                    # Check if each node still exists (might be deleted as part of node deletion)
+                    existing_place2d = [node for node in place2d_nodes if cmds.objExists(node)]
+                    if existing_place2d:
+                        cmds.delete(existing_place2d)
+                        print(f"Deleted {len(existing_place2d)} place2dTexture nodes.")
+                
+                # Clean up any shading networks that might not be deleted automatically
+                if connected_shaders:
+                    # Remove duplicates and check existence
+                    connected_shaders = list(set(connected_shaders))
+                    existing_shaders = [node for node in connected_shaders if cmds.objExists(node)]
+                    if existing_shaders:
+                        # Only delete shaders that have no other connections
+                        for shader in existing_shaders[:]:  # Copy the list to avoid modification during iteration
+                            # Check if this shader has any inputs other than from our deleted nodes
+                            has_other_inputs = False
+                            inputs = cmds.listConnections(shader, destination=False, source=True) or []
+                            for input_node in inputs:
+                                if input_node not in noisy_nodes and cmds.objExists(input_node):
+                                    has_other_inputs = True
+                                    break
+                            
+                            # Only delete if it has no other inputs
+                            if not has_other_inputs and cmds.objExists(shader):
+                                cmds.delete(shader)
+                                print(f"Deleted orphaned shader: {shader}")
+                
+                # Clean up any shading groups that might be orphaned
+                if connected_sg_sets:
+                    connected_sg_sets = list(set(connected_sg_sets))
+                    existing_sg = [node for node in connected_sg_sets if cmds.objExists(node)]
+                    if existing_sg:
+                        for sg in existing_sg[:]:  # Copy the list to avoid modification during iteration
+                            # Check if this shading group has any surface shader connected
+                            has_surface_shader = cmds.listConnections(f"{sg}.surfaceShader", destination=False, source=True)
+                            # Delete only if it has no surface shader
+                            if not has_surface_shader and cmds.objExists(sg):
+                                cmds.delete(sg)
+                                print(f"Deleted orphaned shading group: {sg}")
+                
+                print("Cleanup of NoisyHandy nodes and related networks completed.")
+            else:
+                print("No NoisyHandy nodes found to clean up.")
+        except Exception as e:
+            print(f"Error during node cleanup: {str(e)}")
+            # Continue with deregistration even if cleanup fails
+        
+        # Now deregister the commands and node types
         mplugin.deregisterCommand(NoisyHandyInferenceCmd.command_name)
+        mplugin.deregisterNode(NoisyHandyNode.id)
+        mplugin.deregisterCommand(CreateNoisyHandyNodeCmd.command_name)
         
         # Clean up UI elements
         try:
@@ -397,7 +960,22 @@ def uninitializePlugin(mobject):
         except Exception as e:
             OpenMaya.MGlobal.displayWarning(f"Error cleaning up UI: {str(e)}")
         
+        # Clean up temporary files in temp_output directory
+        try:
+            temp_output_dir = PATHS['temp_output_dir']
+            if os.path.exists(temp_output_dir):
+                for tmp_file in os.listdir(temp_output_dir):
+                    if tmp_file.startswith('tmp_'):
+                        try:
+                            file_path = os.path.join(temp_output_dir, tmp_file)
+                            os.remove(file_path)
+                            print(f"Deleted temporary file: {file_path}")
+                        except Exception as file_e:
+                            print(f"Failed to delete temporary file {tmp_file}: {str(file_e)}")
+        except Exception as e:
+            OpenMaya.MGlobal.displayWarning(f"Error cleaning up temporary files: {str(e)}")
+        
         OpenMaya.MGlobal.displayInfo(f"{PLUGIN_NAME} v{PLUGIN_VERSION} unloaded successfully")
-    except:
-        sys.stderr.write(f"Failed to unregister command: {NoisyHandyInferenceCmd.command_name}\n")
+    except Exception as e:
+        sys.stderr.write(f"Error during plugin unload: {str(e)}\n")
         raise

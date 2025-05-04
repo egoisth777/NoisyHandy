@@ -7,9 +7,11 @@ import sys
 import json
 import tempfile
 
+# Add parent directory to path to allow imports from sibling packages
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import Important Path from maya_plugin
-from maya_plugin import PATHS
+# Get paths from the plugin itself
+from noisyhandy_maya_plugin import PATHS
 
 # Configure PIL
 try:
@@ -29,8 +31,15 @@ except ImportError:
 # Now import project-specific modules
 try:
     from config.noise_config import noise_aliases, ntype_to_params_map
+    from noisyhandy_node_generator import (
+        create_perlin_example,
+        create_animated_noise_example,
+        create_terrain_example,
+        create_terrain_from_noise,
+        create_noise_node
+    )
 except ImportError:
-    cmds.warning("Could not import noise_config module. Check your installation.")
+    cmds.warning("Could not import some modules. Check your installation.")
     # Fallback defaults
     noise_aliases = {}
     ntype_to_params_map = {}
@@ -64,9 +73,6 @@ class NoisyHandyUI:
     # Define patterns and paths dynamically
     NOISE_PATTERNS = ["damas", "galvanic", "cells1", "cells4", "perlin", "gaussian", "voro", "liquid", "fibers", "micro", "rust"]
     MASK_SHAPES = [os.path.splitext(f)[0] for f in os.listdir(MASK_DIR) if f.endswith('.png') and not f.startswith('tmp')]
-
-    print(NOISE_PATTERNS)
-    print(MASK_SHAPES)
 
     NOISE_PARAMETERS = {}
 
@@ -108,7 +114,6 @@ class NoisyHandyUI:
 
         for noise_pattern in self.NOISE_PATTERNS:
             self.NOISE_PARAMETERS[noise_pattern] = ntype_to_params_map.get(noise_aliases.get(noise_pattern, noise_pattern), [])
-        print(self.NOISE_PARAMETERS)
     
     def _ensure_plugin_loaded(self):
         """Make sure the NoisyHandy plugin is loaded before accessing its commands"""
@@ -346,16 +351,89 @@ class NoisyHandyUI:
         cmds.setParent('..')  # Back to frameLayout
         cmds.setParent('..')  # Back to columnLayout
         
-        # Add spacer before Generate button
+        # Add spacer before buttons
         cmds.separator(height=20, style='none')
+        
+        # Create a row layout for the buttons
+        buttons_row = cmds.rowLayout(
+            numberOfColumns=3, 
+            columnWidth3=(115, 115, 115), 
+            adjustableColumn=2,
+            columnAlign=[1, "center"],
+            parent=left_column
+        )
         
         # Generate button
         cmds.button(
             label="Generate", 
             command=self.on_generate,
             height=45,
-            backgroundColor=[1.0, 0.5, 0.0]  # Orange color
+            backgroundColor=[1.0, 0.5, 0.0],  # Orange color
+            parent=buttons_row
         )
+        
+        # Create Noise Node button
+        cmds.button(
+            label="Create Noise Node", 
+            command=self.on_create_node,
+            height=45,
+            backgroundColor=[0.2, 0.6, 0.8],  # Blue color
+            parent=buttons_row
+        )
+        
+        # Add terrain generation button
+        cmds.button(
+            label="Create Terrain", 
+            command=self.on_create_terrain,
+            height=45,
+            backgroundColor=[0.3, 0.8, 0.3],  # Green color
+            parent=buttons_row
+        )
+        
+        cmds.setParent('..')  # Back to left_column
+
+        # Add a section for node operations with explanations
+        cmds.frameLayout(
+            label="Node Creation Tips", 
+            collapsable=True, 
+            collapse=True,
+            borderStyle="etchedOut", 
+            marginWidth=5, 
+            marginHeight=5,
+            labelVisible=True
+        )
+
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+        
+        cmds.text(
+            label="1. Generate noise using the Generate button first",
+            align="left"
+        )
+        
+        cmds.text(
+            label="2. Click 'Create Noise Node' to create a Maya node",
+            align="left"
+        )
+        
+        cmds.text(
+            label="3. Connect the node to materials or displacements",
+            align="left"
+        )
+        
+        cmds.text(
+            label="4. Use 'Create Terrain' for quick terrain visualization",
+            align="left"
+        )
+        
+        cmds.separator(height=10, style='single')
+        
+        cmds.text(
+            label="The created node can be used like any Maya texture node",
+            align="left"
+        )
+        
+        cmds.setParent('..')  # Back to frameLayout
+        cmds.setParent('..')  # Back to left_column
         
         # Add stretchy space at the bottom to push everything up
         cmds.text(label="", height=10)
@@ -455,9 +533,7 @@ class NoisyHandyUI:
             im.save(output_path)
 
     def update_single_noise_preview(self, pattern, pattern_image, params, size=(350, 350)):
-        print(params)
         try:
-            print("into single noise preview")
             result = cmds.noisyHandyInference(
                 pattern1 = pattern,
                 pattern1Params = json.dumps(params),
@@ -466,13 +542,11 @@ class NoisyHandyUI:
                 maskPath = '',
                 blendFactor = 0
             )
-            print("get result from model")
-            print(result)
 
             cmds.image(pattern_image, edit=True, image=result)
 
         except Exception as e:
-            cmds.warning( f"Error generating noise: {str(e)}")
+            cmds.warning(f"Error generating noise: {str(e)}")
             raise
 
     # Event handlers
@@ -561,18 +635,72 @@ class NoisyHandyUI:
         """Handler for blend factor slider change"""
         self.blend_factor = float(value)
         cmds.text(self.blend_value_text, edit=True, label=f"{self.blend_factor:.2f}")
-    
 
+    def on_create_node(self, *args):
+        """Handler for creating a NoisyHandy noise node from the generated texture"""
+        try:
+            # Check if we have a generated output
+            if not hasattr(self, 'output_preview_path') or not self.output_preview_path or not os.path.exists(self.output_preview_path):
+                cmds.warning("Please generate a noise texture first.")
+                return
+            
+            # Create a NoisyHandy node using our node generator
+            return create_noise_node(
+                self.pattern1_value,
+                self.pattern2_value,
+                self.blend_factor,
+                self.output_preview_path,
+                self.pattern1_param_values,
+                self.pattern2_param_values
+            )
+            
+        except Exception as e:
+            # Display error message
+            error_msg = f"Error creating NoisyHandy node: {str(e)}"
+            cmds.warning(error_msg)
+            cmds.confirmDialog(
+                title="Node Creation Error",
+                message=error_msg,
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return None
     
+    def on_create_terrain(self, *args):
+        """Creates a terrain object using the generated noise as displacement"""
+        try:
+            # Check if we have a generated output
+            if not hasattr(self, 'output_preview_path') or not self.output_preview_path or not os.path.exists(self.output_preview_path):
+                cmds.warning("Please generate a noise texture first.")
+                return None
+                
+            # Create the terrain using our terrain generator
+            return create_terrain_from_noise(
+                self.output_preview_path,
+                self.pattern1_value,
+                self.pattern2_value,
+                self.blend_factor,
+                self.pattern1_param_values, 
+                self.pattern2_param_values
+            )
+            
+        except Exception as e:
+            error_msg = f"Error creating terrain: {str(e)}"
+            cmds.warning(error_msg)
+            cmds.confirmDialog(
+                title="Terrain Creation Error",
+                message=error_msg,
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return None
+
     def on_generate(self, *args):
         """
         Handler for generating button click
         Will Generate an image, store that to {root_dir} + "/inference/temp_output/"
         """
         try:
-            # Call the plugin command with the selected parameters
-            print("into blending noise preview")
-            
             # Check if mask path is set and valid, use a default uniform mask if not
             mask_path = PATHS['mask_dir']
             if hasattr(self, 'mask_preview_path') and self.mask_preview_path and os.path.exists(self.mask_preview_path):
@@ -596,11 +724,11 @@ class NoisyHandyUI:
                 maskPath=mask_path,
                 blendFactor=self.blend_factor
             )
-        
-            print("Result Generated from Model")
-            print(result)
 
             cmds.image(self.output_image, edit=True, image=result)
+            
+            # Store the output path for creating a noise node
+            self.output_preview_path = result
             
             # Display success message
             cmds.inViewMessage(
@@ -619,6 +747,7 @@ class NoisyHandyUI:
                 button=["OK"],
                 defaultButton="OK"
             )
+
 
 def cleanup_ui():
     """Remove all UI elements created by the plugin"""
@@ -645,10 +774,83 @@ def cleanup_ui():
     
     print("NoisyHandy UI elements have been removed")
 
+
+def create_menu():
+    """Create a menu for NoisyHandy in Maya"""
+    # Clean up any existing menu first
+    if cmds.menu('NoisyHandyMenu', exists=True):
+        cmds.deleteUI('NoisyHandyMenu')
+
+    # Create the menu
+    main_menu = cmds.menu('NoisyHandyMenu', label='NoisyHandy', parent='MayaWindow', tearOff=True)
+    
+    # Menu items for main functions
+    cmds.menuItem(label='Show UI', command=lambda x: show_noisy_handy_ui())
+    cmds.menuItem(divider=True)
+    cmds.menuItem(label='Create Noise Node from UI', command=lambda x: NoisyHandyUI().on_create_node())
+    cmds.menuItem(label='Create Terrain from Noise', command=lambda x: NoisyHandyUI().on_create_terrain())
+    
+    # Examples submenu
+    examples_menu = cmds.menuItem(label='Examples', subMenu=True)
+    cmds.menuItem(label='Basic Perlin Noise Node', command=create_perlin_example)
+    cmds.menuItem(label='Animated Noise', command=create_animated_noise_example)
+    cmds.menuItem(label='Simple Terrain', command=create_terrain_example)
+    cmds.setParent('..', menu=True)  # Go back to main menu
+    
+    # Help/Info submenu
+    help_menu = cmds.menuItem(label='Help', subMenu=True)
+    cmds.menuItem(label='About NoisyHandy', command=lambda x: cmds.confirmDialog(
+        title='About NoisyHandy',
+        message='NoisyHandy Plugin\nVersion 1.0.1\n\nA Maya plugin for generating custom noise textures.',
+        button='OK'
+    ))
+    cmds.menuItem(label='User Guide', command=show_user_guide)
+    cmds.setParent('..', menu=True)  # Go back to main menu
+    
+    print("NoisyHandy menu created successfully")
+    return main_menu
+
+
+def show_user_guide(*args):
+    """Show a user guide for NoisyHandy"""
+    guide_text = """
+    NoisyHandy - User Guide
+    ======================
+    
+    1. Generating Noise:
+       - Select noise patterns from dropdowns
+       - Adjust parameters using sliders
+       - Select a mask shape for blending
+       - Click "Generate" to create the noise texture
+    
+    2. Creating Nodes:
+       - After generating a noise texture, click "Create Noise Node"
+       - The node can be connected to materials, displacement, etc.
+       
+    3. Creating Terrain:
+       - After generating a noise texture, use "Create Terrain from Noise" 
+         from the NoisyHandy menu
+       - This creates a terrain with the noise applied as displacement
+       
+    4. Animation:
+       - Enable "animateNoise" on the node
+       - Set animation speed and other parameters
+       - The noise will change over time
+    """
+    
+    cmds.confirmDialog(
+        title='NoisyHandy User Guide',
+        message=guide_text,
+        button='OK',
+        defaultButton='OK'
+    )
+
+
 # Function to create and show the UI
 def show_noisy_handy_ui():
     ui = NoisyHandyUI()
     ui.create_ui()
+
 
 # Only create the UI when this script is run directly (not when imported)
 if __name__ == "__main__":
