@@ -4,14 +4,49 @@ import os
 import sys
 import json
 import tempfile
-from PIL import Image
 
-plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
-plugin_dir = os.path.dirname(plugin_path)
-root_dir = os.path.dirname(plugin_dir)
+import noisyhandy_maya_ui
+
+# Handle PIL import more gracefully
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    cmds.warning("PIL (Python Imaging Library) not found. Some functionality will be limited.")
+    # Define a minimal Image class as fallback
+    class Image:
+        @staticmethod
+        def open(path):
+            return None
+        class Resampling:
+            LANCZOS = 1
+
+# Get plugin path and setup paths
+def get_root_path():
+    plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
+    plugin_dir = os.path.dirname(plugin_path)
+    root_dir = os.path.dirname(plugin_dir)
+    return root_dir
+
+# Add the root directory to sys.path if it's not already there
+root_dir = get_root_path()
 if root_dir not in sys.path:
     sys.path.append(root_dir)
-from config.noise_config import noise_aliases, ntype_to_params_map
+
+# Try to find Python site-packages in Maya's installation
+mayapy_dir = os.path.join(os.path.dirname(sys.executable), 'lib', 'site-packages')
+if os.path.exists(mayapy_dir) and mayapy_dir not in sys.path:
+    sys.path.append(mayapy_dir)
+    
+# Now import project-specific modules
+try:
+    from config.noise_config import noise_aliases, ntype_to_params_map
+except ImportError:
+    cmds.warning("Could not import noise_config module. Check your installation.")
+    # Fallback defaults
+    noise_aliases = {}
+    ntype_to_params_map = {}
 
 class NoisyHandyUI:
     """UI for the NoisyHandy Maya plugin"""
@@ -19,8 +54,12 @@ class NoisyHandyUI:
     WINDOW_NAME = "NoisyHandyUI"
     WINDOW_TITLE = "NoisyHandy"
     
+    # Get paths relative to the plugin location
+    ROOT_PATH = get_root_path()
+    
+    # Define patterns and paths dynamically
     NOISE_PATTERNS = ["damas", "galvanic", "cells1", "cells4", "perlin", "gaussian", "voro", "liquid", "fibers", "micro", "rust"]
-    MASK_DIR = "D:/Projects/Upenn_CIS_6600/NoisyHandy/LYY/NoisyHandy/inference/masks"
+    MASK_DIR = os.path.join(ROOT_PATH, "inference", "masks")
     MASK_SHAPES = [os.path.splitext(f)[0] for f in os.listdir(MASK_DIR) if f.endswith('.png') and not f.startswith('tmp')]
 
     print(NOISE_PATTERNS)
@@ -32,6 +71,9 @@ class NoisyHandyUI:
     PREVIEW_IMAGES_PATH = tempfile.gettempdir()
     
     def __init__(self):
+        # Ensure the plugin is loaded before attempting to use any of its commands
+        self._ensure_plugin_loaded()
+        
         self.pattern1_value = self.NOISE_PATTERNS[0]
         self.pattern2_value = self.NOISE_PATTERNS[1]
         self.mask_shape_value = self.MASK_SHAPES[0]
@@ -65,6 +107,28 @@ class NoisyHandyUI:
             self.NOISE_PARAMETERS[noise_pattern] = ntype_to_params_map.get(noise_aliases.get(noise_pattern, noise_pattern), [])
         print(self.NOISE_PARAMETERS)
     
+    def _ensure_plugin_loaded(self):
+        """Make sure the NoisyHandy plugin is loaded before accessing its commands"""
+        plugin_name = "noisyhandy_maya_plugin.py"
+        
+        # Check if the plugin is already loaded
+        if not cmds.pluginInfo(plugin_name, query=True, loaded=True):
+            try:
+                # Try to load the plugin
+                cmds.loadPlugin(plugin_name)
+                print(f"Plugin {plugin_name} loaded successfully.")
+            except Exception as e:
+                cmds.warning(f"Failed to load plugin {plugin_name}: {str(e)}")
+                # You might want to show a dialog to the user here
+                cmds.confirmDialog(
+                    title="Plugin Load Error",
+                    message=f"Could not load the NoisyHandy plugin.\nError: {str(e)}",
+                    button=["OK"],
+                    defaultButton="OK"
+                )
+        else:
+            print(f"Plugin {plugin_name} is already loaded.")
+
     def create_parameter_controls(self, pattern, parent_container, param_elements, param_values):
         """Create parameter sliders for a given noise pattern"""
         # Remove existing parameter controls
@@ -118,7 +182,6 @@ class NoisyHandyUI:
             value_text = cmds.text(label=f"{param_values[param]:.2f}", width=80)
             
             cmds.setParent('..')  # Back to frame
-            
             # Store UI elements for later reference
             param_elements[param] = {
                 'slider': slider,
@@ -383,9 +446,10 @@ class NoisyHandyUI:
         cmds.showWindow(window)
 
     def resize_and_save(self, input_path, output_path, size=(350, 350)):
-        im = Image.open(input_path)
-        im = im.resize(size, Image.Resampling.LANCZOS)
-        im.save(output_path)
+        if PIL_AVAILABLE:
+            im = Image.open(input_path)
+            im = im.resize(size, Image.Resampling.LANCZOS)
+            im.save(output_path)
 
     def update_single_noise_preview(self, pattern, pattern_image, params, size=(350, 350)):
         print(params)
@@ -479,7 +543,7 @@ class NoisyHandyUI:
         mask_path = os.path.join(self.MASK_DIR, self.mask_shape_value + '.png')
 
         if os.path.exists(mask_path):
-            tmp_path = 'D:/Projects/Upenn_CIS_6600/NoisyHandy/LYY/NoisyHandy/inference/masks/tmp_mask.png'
+            tmp_path = os.path.join(self.MASK_DIR, 'tmp_mask.png')
             self.resize_and_save(mask_path, tmp_path)
 
             # Update the UI image control with the new image
@@ -497,16 +561,31 @@ class NoisyHandyUI:
     
     def on_generate(self, *args):
         """Handler for generate button click"""
-        # Here is where you would call the NoisyHandy plugin command
         try:
             # Call the plugin command with the selected parameters
             print("into blending noise preview")
+            
+            # Check if mask path is set and valid, use a default uniform mask if not
+            mask_path = root_dir + '\\inference\\masks'
+            if hasattr(self, 'mask_preview_path') and self.mask_preview_path and os.path.exists(self.mask_preview_path):
+                mask_path = self.mask_preview_path
+            else:
+                # Use the uniform mask as a fallback
+                mask_path = os.path.join(self.MASK_DIR, 'uniform.png')
+                if not os.path.exists(mask_path):
+                    # Create a blank white image if even the uniform mask doesn't exist
+                    if PIL_AVAILABLE:
+                        blank_mask = Image.new('RGB', (256, 256), color=(255, 255, 255))
+                        blank_mask.save(mask_path)
+                    else:
+                        cmds.warning("Cannot create default mask - PIL not available")
+            
             result = cmds.noisyHandyInference(
                 pattern1=self.pattern1_value,
-                pattern1Params = json.dumps(self.pattern1_param_values),
+                pattern1Params=json.dumps(self.pattern1_param_values),
                 pattern2=self.pattern2_value,
-                pattern2Params = json.dumps(self.pattern2_param_values),
-                maskPath=self.mask_preview_path,
+                pattern2Params=json.dumps(self.pattern2_param_values),
+                maskPath=mask_path,
                 blendFactor=self.blend_factor
             )
             print("get result from model")
