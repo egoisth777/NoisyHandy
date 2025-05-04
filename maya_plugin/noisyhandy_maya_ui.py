@@ -1,3 +1,5 @@
+################################################################### IMPORT ############################################################################
+#######################################################################################################################################################
 import maya.cmds as cmds
 import maya.mel as mel
 import os
@@ -5,9 +7,11 @@ import sys
 import json
 import tempfile
 
-import noisyhandy_maya_ui
 
-# Handle PIL import more gracefully
+# Import Important Path from maya_plugin
+from maya_plugin import PATHS
+
+# Configure PIL
 try:
     from PIL import Image
     PIL_AVAILABLE = True
@@ -21,23 +25,6 @@ except ImportError:
             return None
         class Resampling:
             LANCZOS = 1
-
-# Get plugin path and setup paths
-def get_root_path():
-    plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
-    plugin_dir = os.path.dirname(plugin_path)
-    root_dir = os.path.dirname(plugin_dir)
-    return root_dir
-
-# Add the root directory to sys.path if it's not already there
-root_dir = get_root_path()
-if root_dir not in sys.path:
-    sys.path.append(root_dir)
-
-# Try to find Python site-packages in Maya's installation
-mayapy_dir = os.path.join(os.path.dirname(sys.executable), 'lib', 'site-packages')
-if os.path.exists(mayapy_dir) and mayapy_dir not in sys.path:
-    sys.path.append(mayapy_dir)
     
 # Now import project-specific modules
 try:
@@ -47,19 +34,35 @@ except ImportError:
     # Fallback defaults
     noise_aliases = {}
     ntype_to_params_map = {}
+################################################################### END IMPORT ########################################################################
+#######################################################################################################################################################
 
+
+########################################################################################################################################################
+# STATIC HELPERS #######################################################################################################################################
+
+def get_root_path():
+    """
+    Return the Path to the root directory
+    @return a string value representing the parent directory of the plugin
+    """
+    return PATHS['root_dir']
+#######################################################################################################################################################
+
+
+# UI CLASS COMPONENT
 class NoisyHandyUI:
     """UI for the NoisyHandy Maya plugin"""
     
     WINDOW_NAME = "NoisyHandyUI"
     WINDOW_TITLE = "NoisyHandy"
     
-    # Get paths relative to the plugin location
-    ROOT_PATH = get_root_path()
-    
+    # Get paths from the centralized configuration
+    ROOT_PATH = PATHS['root_dir']
+    MASK_DIR = PATHS['mask_dir']
+
     # Define patterns and paths dynamically
     NOISE_PATTERNS = ["damas", "galvanic", "cells1", "cells4", "perlin", "gaussian", "voro", "liquid", "fibers", "micro", "rust"]
-    MASK_DIR = os.path.join(ROOT_PATH, "inference", "masks")
     MASK_SHAPES = [os.path.splitext(f)[0] for f in os.listdir(MASK_DIR) if f.endswith('.png') and not f.startswith('tmp')]
 
     print(NOISE_PATTERNS)
@@ -559,16 +562,19 @@ class NoisyHandyUI:
         self.blend_factor = float(value)
         cmds.text(self.blend_value_text, edit=True, label=f"{self.blend_factor:.2f}")
     
+
+    
     def on_generate(self, *args):
         """
         Handler for generating button click
+        Will Generate an image, store that to {root_dir} + "/inference/temp_output/"
         """
         try:
             # Call the plugin command with the selected parameters
             print("into blending noise preview")
             
             # Check if mask path is set and valid, use a default uniform mask if not
-            mask_path = root_dir + '\\inference\\masks'
+            mask_path = PATHS['mask_dir']
             if hasattr(self, 'mask_preview_path') and self.mask_preview_path and os.path.exists(self.mask_preview_path):
                 mask_path = self.mask_preview_path
             else:
@@ -590,7 +596,8 @@ class NoisyHandyUI:
                 maskPath=mask_path,
                 blendFactor=self.blend_factor
             )
-            print("get result from model")
+        
+            print("Result Generated from Model")
             print(result)
 
             cmds.image(self.output_image, edit=True, image=result)
@@ -624,7 +631,7 @@ def cleanup_ui():
         cmds.deleteUI('NoisyHandyMenu')
         
     # Clean up any temporary files that might have been created
-    mask_dir = os.path.join(get_root_path(), "inference", "masks")
+    mask_dir = PATHS['mask_dir']
     try:
         # Remove temporary files
         for tmp_file in os.listdir(mask_dir):
@@ -638,42 +645,12 @@ def cleanup_ui():
     
     print("NoisyHandy UI elements have been removed")
 
-def create_menu():
-    """Create a menu in Maya with NoisyHandy options"""
-    
-    # Check if the menu already exists and delete it
-    if cmds.menu('NoisyHandyMenu', exists=True):
-        cmds.deleteUI('NoisyHandyMenu')
-    
-    # Get the main Maya menu bar
-    gMainWindow = mel.eval('$temp=$gMainWindow')
-    
-    # Create a new menu on the menu bar
-    noisy_menu = cmds.menu('NoisyHandyMenu', label='NoisyHandy', parent=gMainWindow, tearOff=True)
-    
-    # Add menu items
-    cmds.menuItem(label='Generate Texture', command=lambda x: show_noisy_handy_ui())
-    
-    # Optional: Add a separator and more menu items if needed
-    cmds.menuItem(divider=True)
-    cmds.menuItem(label='About', command=lambda x: cmds.confirmDialog(
-        title='About NoisyHandy',
-        message='NoisyHandy v1.0.0\nProcedural Generator of Spatially-Varying Noise Patterns',
-        button=['OK'],
-        defaultButton='OK'
-    ))
-    
-    return noisy_menu
-
 # Function to create and show the UI
 def show_noisy_handy_ui():
     ui = NoisyHandyUI()
     ui.create_ui()
 
-# Create the menu when this script is imported
+# Only create the UI when this script is run directly (not when imported)
 if __name__ == "__main__":
     # Show the UI directly when run as a script
     show_noisy_handy_ui()
-else:
-    # Just create the menu when imported
-    create_menu()

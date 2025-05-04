@@ -13,14 +13,53 @@ from types import SimpleNamespace
 # Setting up Maya Internal command interfaces package:
 import maya.cmds as cmds
 import maya.OpenMaya as OpenMaya
-import maya.OpenMayaMPx as OpenMayaMPx
+import maya.OpenMayaMPx as OpenMayaMPx 
 
+# Import Other information
 
-# Plugin information
+import noisyhandy_maya_ui
+# Plugin Information
 PLUGIN_NAME = "NoisyHandyPlugin"
 PLUGIN_VERSION = "1.0.1"
 
-import noisyhandy_maya_ui
+# Centralized path management
+def setup_paths():
+    """
+    Centralized function to manage all paths needed by the NoisyHandy plugin.
+    Sets up required paths and returns a dictionary with all path configurations.
+    """
+    paths = {}
+    
+    # Get the plugin path
+    plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
+    plugin_dir = os.path.dirname(plugin_path)
+    root_dir = os.path.dirname(plugin_dir)
+    
+    # Set up the important paths
+    paths['plugin_dir'] = plugin_dir
+    paths['root_dir'] = root_dir
+    paths['mask_dir'] = os.path.join(root_dir, "inference", "masks")
+    paths['temp_output_dir'] = os.path.join(root_dir, "inference", "temp_output")
+    paths['checkpoints_dir'] = os.path.join(root_dir, "checkpoints")
+    paths['config_dir'] = os.path.join(root_dir, "config")
+    
+    # Ensure temp_output directory exists
+    if not os.path.exists(paths['temp_output_dir']):
+        os.makedirs(paths['temp_output_dir'], exist_ok=True)
+    
+    # Add paths to sys.path if needed
+    if root_dir not in sys.path:
+        sys.path.append(root_dir)
+        print(f"Added {root_dir} to sys.path")
+    
+    # Add Maya's site-packages path
+    mayapy_dir = os.path.join(os.path.dirname(sys.executable), 'lib', 'site-packages')
+    if os.path.exists(mayapy_dir) and mayapy_dir not in sys.path:
+        sys.path.append(mayapy_dir)
+        print(f"Added Maya's site-packages: {mayapy_dir}")
+    
+    return paths
+
 
 def setup_dependencies() -> bool:
     """
@@ -28,7 +67,10 @@ def setup_dependencies() -> bool:
     and that the CUDA runtime DLLs are visible before importing torch.
     Returns True if torch imports OK, False otherwise.
     """
-
+    print(">>>>>>>>>>>>>>>>>>>>>>>>>>")
+    print("INITIATING DEPENDENCY CHECK")
+    print("==========================")
+    print("SETTING UP DEPENDENCY INFO")
     # 1) Check NumPy
     try:
         import numpy  # 
@@ -49,51 +91,25 @@ def setup_dependencies() -> bool:
         
         print(f"[✓] Successfully imported torch, version {torch.__version__}")
         print(f"[✓]CUDA is Available: {torch.cuda.is_available()}")
+        print("END SETTING UP DEPENDENCY")
+        print("==========================")
         return True
     except Exception as e:
         print(f"[!] Failed to import torch: {e}")
         print("    • Make sure you have the MSVC runtime installed")
         print("    • If you're using a CUDA build, double-check that the "
               "CUDA runtime DLLs are on PATH or added via `os.add_dll_directory`")
+        print("END SETTING UP DEPENDENCY")
+        print("==========================")
+        print("<<<<<<<<<<<<<<<<<<<<<<<<<<")
         return False
 
+# Initialize paths
+PATHS = setup_paths()
 
-def setup_paths():
-    """
-    Add plugin parent paths to System Path, making sure that the plugin is loaded
-    @return bool value indicating whether set-up has been successful or not
-    """
-    try:
-        # Get the directory of this plugin
-        plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
-        plugin_dir = os.path.dirname(plugin_path)
-
-        # Get the root directory (parent of the plugin dir)
-        root_dir = os.path.dirname(plugin_dir)
-
-        # Add the root directory to sys.path if it's not already there
-        if root_dir not in sys.path:
-            sys.path.append(root_dir)
-            
-        # Let's also make sure we have access to packages Maya needs
-        mayapy_dir = os.path.join(os.path.dirname(sys.executable), 'lib', 'site-packages')
-        if os.path.exists(mayapy_dir) and mayapy_dir not in sys.path:
-            sys.path.append(mayapy_dir)
-            
-        # Add user site-packages path which might contain Pillow
-        import site
-        for site_path in site.getsitepackages():
-            if site_path not in sys.path:
-                sys.path.append(site_path)
-                print(f"Added site-packages path: {site_path}")
-            
-        print(f"Added {root_dir} to sys.path")
-        
-    except Exception as e:
-        print(f"Error detected while setting up paths: {str(e)}")    
-        return False
+# Initialize Dependencies
 setup_dependencies()
-setup_paths()
+
 ##################################################################################################################################
 ##################################################################################################################################
 ##################################################################################################################################
@@ -105,18 +121,13 @@ def get_root_path():
     Return the Path to the root 
     @return a string value representing the parent directory of the plugin
     """
-    plugin_path = cmds.pluginInfo("noisyhandy_maya_plugin.py", query=True, path=True)
-    plugin_dir = os.path.dirname(plugin_path)
-    
-    # Get the root directory(parent of the plugin dir)
-    root_dir = os.path.dirname(plugin_dir)
-    print(f"Root Directory Path: {root_dir}")
-    
-    return root_dir
+    return PATHS['root_dir']
 
 # Maya command for running inference
 class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
-    """Maya command to run inference with the NoisyHandy model"""
+    """
+    Maya command to run inference with the NoisyHandy model
+    """
     root_path = None
     command_name = "noisyHandyInference"
     inf = None
@@ -126,9 +137,6 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
         
         if NoisyHandyInferenceCmd.inf is None:
             try:
-                # Try to import necessary modules after ensuring paths are set up
-                import numpy as np
-                 
                 # Fixing the issue that the Torch doesn't see the correct dll
                 os.add_dll_directory(r"C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4\\bin")
                 import torch
@@ -165,16 +173,17 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
                 
                 from inference.inference import Inference, dict2cond
                 
-                # Get the root path of the plugin
-                root_path = get_root_path()
+                # Get paths using centralized path management
+                root_path = PATHS['root_dir']
+                config_path = PATHS['config_dir']
 
                 # Load config from .json using relative path
-                json_path = os.path.join(root_path, 'config', 'model_config.json')
+                json_path = os.path.join(config_path, 'model_config.json')
                 with open(json_path, 'r') as f:
                     config = json.load(f)
                     config = SimpleNamespace(**config)
 
-                config.out_dir = os.path.join(root_path, 'checkpoints')
+                config.out_dir = PATHS['checkpoints_dir']
                 config.exp_name = 'v1'
                 config.sample_timesteps = 30  # Reduce for faster generation
 
@@ -186,18 +195,22 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
             except Exception as e:
                 print(f"Error initializing model for inference: {str(e)}")
                 raise
+             
         else:
             print("Inference already setup")
     
     def doIt(self, args):
-        """Execute the command"""
+        """
+        Execute the command
+        """
         try:
             print("into doit")
             # Parse arguments
             argData = OpenMaya.MArgParser(self.syntax(), args)
             
-            # Get root path for relative paths
-            root_path = get_root_path()
+            # Get paths using centralized path management
+            root_path = PATHS['root_dir']
+            temp_output_dir = PATHS['temp_output_dir']
             
             # Get parameters from UI using the old API methods
             pattern1 = ""
@@ -265,8 +278,8 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
                         W=W,
                         blending_factor=blend_factor
                     )
-                # Use relative path based on project root
-                output_path = os.path.join(root_path, 'inference', 'masks', 'tmp_output.png')
+                # Use path from centralized configuration
+                output_path = os.path.join(temp_output_dir, 'tmp_output.png')
                 print("finish blending")
             else:
                 print("into single")
@@ -282,8 +295,8 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
                     sbsparams = sbsparams.cuda()
                     classes = classes.cuda()
                     res = NoisyHandyInferenceCmd.inf.generate(sbsparams=sbsparams, classes=classes)
-                # Use relative path based on project root
-                output_path = os.path.join(root_path, 'inference', 'masks', f'tmp_{pattern1}.png')
+                # Use path from centralized configuration
+                output_path = os.path.join(temp_output_dir, f'tmp_{pattern1}.png')
                 print("finish single")
             
             if res is not None:
@@ -340,7 +353,10 @@ class NoisyHandyInferenceCmd(OpenMayaMPx.MPxCommand):
 
 # Plugin initialization and cleanup
 def initializePlugin(mobject):
-    """Initialize the plugin when Maya loads it"""
+    """
+    Initialize the plugin when Maya loads it
+    """
+    # SET THE PLUGIN INFORMATION
     mplugin = OpenMayaMPx.MFnPlugin(mobject, "cg@penn", PLUGIN_VERSION, "2025")
     
     try:
@@ -349,13 +365,25 @@ def initializePlugin(mobject):
             NoisyHandyInferenceCmd.cmdCreator,
             NoisyHandyInferenceCmd.syntaxCreator
         )
+        
+        # Create the UI when plugin is loaded
+        try:
+            import noisyhandy_maya_ui
+            noisyhandy_maya_ui.create_menu()
+            print("NoisyHandy UI menu created successfully")
+        except Exception as e:
+            OpenMaya.MGlobal.displayWarning(f"Error creating UI menu: {str(e)}")
+            
         print(f"{PLUGIN_NAME} v{PLUGIN_VERSION} loaded successfully")
     except:
         sys.stderr.write(f"Failed to register command: {NoisyHandyInferenceCmd.command_name}\n")
         raise
 
 def uninitializePlugin(mobject):
-    """Clean up when the plugin is unloaded"""
+    """
+    Clean up when the plugin is unloaded
+    """
+
     mplugin = OpenMayaMPx.MFnPlugin(mobject)
     
     try:
