@@ -18,6 +18,7 @@ import maya.OpenMayaMPx as OpenMayaMPx
 # Import Noise Node Related settings
 import noisyhandy_maya_ui
 from noisyhandy_config import PATHS, PLUGIN_VERSION, PLUGIN_NAME
+import noisyhandy_maya_noise_node  # Import the new module
 
 # Initialize Dependencies
 def setup_dependencies() -> bool:

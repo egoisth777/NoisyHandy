@@ -28,6 +28,9 @@ except ImportError:
 
 from config.noise_config import noise_aliases, ntype_to_params_map
 
+# Add import at the top with other imports
+from noisyhandy_maya_noise_node import create_custom_noise_node
+
 ##################################################################################
 ################################################################### END IMPORT ###
 ##################################################################################
@@ -377,6 +380,14 @@ class NoisyHandyUI:
             backgroundColor=[1.0, 0.5, 0.0]  # Orange color
         )
         
+        # Add the Create Texture Node button below the Generate button
+        cmds.button(
+            label="Create Texture Node", 
+            command=self.on_create_texture_node,
+            height=45,
+            backgroundColor=[0.0, 0.8, 0.0]  # Green color
+        )
+        
         # Add stretchy space at the bottom to push everything up
         cmds.text(label="", height=10)
         
@@ -674,6 +685,34 @@ class NoisyHandyUI:
                 button=["OK"],
                 defaultButton="OK"
             )
+            
+    def on_create_texture_node(self, *args):
+        """
+        Handler for creating a texture node from the generated noise
+        """
+        if not hasattr(self, 'output_preview_path') or not self.output_preview_path:
+            cmds.warning("No texture has been generated yet. Please generate a texture first.")
+            cmds.confirmDialog(
+                title="No Texture Available",
+                message="No texture has been generated yet. Please click 'Generate' first to create a texture.",
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return
+            
+        # Check if the texture file exists
+        if not os.path.exists(self.output_preview_path):
+            cmds.warning(f"Generated texture file not found: {self.output_preview_path}")
+            cmds.confirmDialog(
+                title="Texture Not Found",
+                message="The generated texture file could not be found. Please regenerate the texture.",
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return
+            
+        # Create the custom noise node using the generated texture
+        create_custom_noise_node(self.output_preview_path)
 
 def create_menu():
     """
