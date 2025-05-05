@@ -74,11 +74,19 @@ def create_custom_noise_node(texture_path):
             fade=True
         )
         
-        # Open the Hypershade editor to show the created node
+        # Try to open the Hypershade editor, but catch any errors
         try:
-            cmds.HypershadeWindow()
-            cmds.hyperShadePanel(edit=True, setNodeEditorNodeSelected=file_node)
+            # Use mel.eval instead of direct cmds call for better compatibility
+            import maya.mel as mel
+            mel.eval('HypershadeWindow;')
+            # Try to select the node in hypershade if possible
+            try:
+                # Just select the node in the scene, which should highlight it in hypershade
+                cmds.select(file_node)
+            except Exception:
+                pass
         except Exception as e:
+            # Just log the warning but don't let it interrupt the workflow
             cmds.warning(f"Could not open Hypershade window: {str(e)}")
         
         return file_node

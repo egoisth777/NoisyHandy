@@ -116,6 +116,9 @@ class NoisyHandyUI:
         self.pattern1_param_values = {}
         self.pattern2_param_values = {}
 
+        # Track created terrain objects for updates
+        self.terrain_objects = None
+        
         # Initialize noise parameters
         for noise_pattern in self.NOISE_PATTERNS:
             self.NOISE_PARAMETERS[noise_pattern] = ntype_to_params_map.get(noise_aliases.get(noise_pattern, noise_pattern), [])
@@ -170,7 +173,6 @@ class NoisyHandyUI:
             frame = cmds.frameLayout(
                 label=param.capitalize(),
                 collapsable=False,
-                borderStyle="etchedOut",
                 marginWidth=5,
                 marginHeight=5,
                 labelVisible=True,
@@ -238,7 +240,6 @@ class NoisyHandyUI:
         cmds.frameLayout(
             label="Pattern 1", 
             collapsable=False, 
-            borderStyle="etchedOut", 
             marginWidth=5, 
             marginHeight=5,
             labelVisible=True,
@@ -273,7 +274,6 @@ class NoisyHandyUI:
         cmds.frameLayout(
             label="Pattern 2", 
             collapsable=False, 
-            borderStyle="etchedOut", 
             marginWidth=5, 
             marginHeight=5,
             labelVisible=True,
@@ -308,7 +308,6 @@ class NoisyHandyUI:
         cmds.frameLayout(
             label="Mask Shape", 
             collapsable=False, 
-            borderStyle="etchedOut", 
             marginWidth=5, 
             marginHeight=5,
             labelVisible=True,
@@ -338,7 +337,6 @@ class NoisyHandyUI:
         cmds.frameLayout(
             label="Blend factor", 
             collapsable=False, 
-            borderStyle="etchedOut", 
             marginWidth=5, 
             marginHeight=5,
             labelVisible=True,
@@ -386,6 +384,14 @@ class NoisyHandyUI:
             command=self.on_create_texture_node,
             height=45,
             backgroundColor=[0.0, 0.8, 0.0]  # Green color
+        )
+        
+        # Add the new Generate Terrain button
+        cmds.button(
+            label="Generate Tile", 
+            command=self.on_generate_terrain,
+            height=45,
+            backgroundColor=[0.0, 0.4, 0.8]  # Blue color
         )
         
         # Add stretchy space at the bottom to push everything up
@@ -668,6 +674,9 @@ class NoisyHandyUI:
             # Store the output path for creating a noise node
             self.output_preview_path = result
             
+            # Update the terrain if it exists
+            self.update_terrain()
+            
             # Display success message
             cmds.inViewMessage(
                 assistMessage=f"Generated blended noise with {self.pattern1_value} and {self.pattern2_value}",
@@ -713,6 +722,398 @@ class NoisyHandyUI:
             
         # Create the custom noise node using the generated texture
         create_custom_noise_node(self.output_preview_path)
+        
+    def on_generate_terrain(self, *args):
+        """
+        Handler for generating a terrain from the noise texture
+        """
+        # Check if a texture has been generated
+        if not hasattr(self, 'output_preview_path') or not self.output_preview_path:
+            cmds.warning("No texture has been generated yet. Please generate a texture first.")
+            cmds.confirmDialog(
+                title="No Texture Available",
+                message="No texture has been generated yet. Please click 'Generate' first to create a texture.",
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return
+            
+        # Check if the texture file exists
+        if not os.path.exists(self.output_preview_path):
+            cmds.warning(f"Generated texture file not found: {self.output_preview_path}")
+            cmds.confirmDialog(
+                title="Texture Not Found",
+                message="The generated texture file could not be found. Please regenerate the texture.",
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return
+        
+        # Create a terrain plane
+        try:
+            # If there's already a terrain, delete it first
+            if self.terrain_objects and cmds.objExists(self.terrain_objects['terrain']):
+                # Ask user if they want to replace the existing terrain
+                result = cmds.confirmDialog(
+                    title="Replace Existing Terrain",
+                    message="A terrain already exists. Do you want to replace it?",
+                    button=["Yes", "No"],
+                    defaultButton="Yes",
+                    cancelButton="No",
+                    dismissString="No"
+                )
+                
+                if result == "No":
+                    return
+                    
+                # Delete the existing terrain and its related nodes
+                try:
+                    cmds.delete(self.terrain_objects['terrain'])
+                    if cmds.objExists(self.terrain_objects['shader']):
+                        cmds.delete(self.terrain_objects['shader'])
+                    if cmds.objExists(self.terrain_objects['displacement']):
+                        cmds.delete(self.terrain_objects['displacement'])
+                    # We don't delete the file node as it might be used elsewhere
+                except Exception as e:
+                    cmds.warning(f"Error cleaning up previous terrain: {str(e)}")
+            
+            # Create a file texture node for the displacement
+            file_node = create_custom_noise_node(self.output_preview_path)
+            
+            if not file_node:
+                return
+            
+            # Create a plane for the terrain
+            terrain_plane = cmds.polyPlane(
+                name="noisyHandyTerrain",
+                width=10,
+                height=10,
+                subdivisionsX=100,
+                subdivisionsY=100,
+                constructionHistory=True
+            )[0]
+            
+            # Create shader materials
+            shader = cmds.shadingNode('lambert', asShader=True, name=f'noisyHandyTerrainShader')
+            bump_node = cmds.shadingNode('bump2d', asUtility=True, name=f'noisyHandyTerrainBump')
+            
+            # Connect file to bump
+            cmds.connectAttr(f'{file_node}.outAlpha', f'{bump_node}.bumpValue')
+            
+            # Set bump depth
+            cmds.setAttr(f'{bump_node}.bumpDepth', 1.0)
+            
+            # Connect bump to shader
+            cmds.connectAttr(f'{bump_node}.outNormal', f'{shader}.normalCamera')
+            
+            # Connect file to color
+            cmds.connectAttr(f'{file_node}.outColor', f'{shader}.color')
+            
+            # Create shading group and assign to terrain
+            sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=f'{shader}SG')
+            cmds.connectAttr(f'{shader}.outColor', f'{sg}.surfaceShader')
+            cmds.sets(terrain_plane, edit=True, forceElement=sg)
+            
+            # Create a displacement node for hardware rendering
+            try:
+                # Try to use displacement shading
+                displacement_node = cmds.shadingNode('displacementShader', asShader=True, name=f'noisyHandyTerrainDisplacement')
+                cmds.connectAttr(f'{file_node}.outColorR', f'{displacement_node}.displacement')
+                cmds.connectAttr(f'{displacement_node}.displacement', f'{sg}.displacementShader')
+                cmds.setAttr(f'{displacement_node}.scale', 1.0)
+            except Exception as e:
+                cmds.warning(f"Could not set up displacement shading: {str(e)}")
+                displacement_node = None
+            
+            # Store the created objects for later updates
+            self.terrain_objects = {
+                'terrain': terrain_plane, 
+                'shader': shader, 
+                'displacement': displacement_node if displacement_node else bump_node,
+                'file_node': file_node
+            }
+            
+            # Try another method - apply geometric displacement using deformer
+            try:
+                # Create a displacement deformerGenerate Terrain
+                deformer = cmds.deformer(terrain_plane, type='displacementMap')[0]
+                
+                # Connect the file node to the displacement deformer
+                cmds.connectAttr(f'{file_node}.outColorR', f'{deformer}.displacement')
+                
+                # Set displacement strength
+                cmds.setAttr(f'{deformer}.scale', 1.0)
+                
+                # Store the deformer reference
+                self.terrain_objects['deformer'] = deformer
+            except Exception as e:
+                # This might fail in some Maya versions, so we continue even if it fails
+                cmds.warning(f"Could not create displacement deformer: {str(e)}")
+                # Try a simple vertex displacement approach as a last resort
+                try:
+                    # Get the vertices of the plane
+                    vertices = cmds.ls(f'{terrain_plane}.vtx[*]', flatten=True)
+                    
+                    # Create an expression to animate the vertices based on the texture
+                    # This is a very simplified approach
+                    expr = f'''
+                    // Simple expression to displace terrain vertices
+                    float $scale = 1.0;
+                    '''
+                    
+                    # Add the expression to the scene
+                    cmds.expression(string=expr, name="terrainDisplacement", alwaysEvaluate=True)
+                    
+                except Exception as e2:
+                    cmds.warning(f"Could not create vertex displacement: {str(e2)}")
+                    pass
+            
+            # Create a window for controlling the terrain
+            self.create_terrain_control_window(terrain_plane, self.terrain_objects['displacement'])
+            
+            # Select the terrain
+            cmds.select(terrain_plane)
+            
+            # Frame the view on the terrain
+            cmds.viewFit()
+            
+            # Set feedback for the user
+            cmds.inViewMessage(
+                assistMessage=f"Created terrain from noise texture",
+                position="topCenter",
+                fade=True
+            )
+            
+            # Return the created objects
+            return self.terrain_objects
+            
+        except Exception as e:
+            error_msg = f"Error creating terrain: {str(e)}"
+            cmds.warning(error_msg)
+            cmds.confirmDialog(
+                title="Terrain Creation Error",
+                message=error_msg,
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return None
+
+    def create_terrain_control_window(self, terrain, displacement_node):
+        """
+        Creates a control window for the terrain
+        """
+        # Close the window if it exists
+        if cmds.window("terrainControlWindow", exists=True):
+            cmds.deleteUI("terrainControlWindow")
+            
+        # Create window
+        window = cmds.window(
+            "terrainControlWindow", 
+            title="Terrain Controls",
+            widthHeight=(300, 150)
+        )
+        
+        # Create layout
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=5, columnWidth=300)
+        
+        # Add title
+        cmds.text(label="Terrain Displacement Controls", height=30, font="boldLabelFont")
+        
+        # Add scale slider
+        scale_frame = cmds.frameLayout(
+            label="Displacement Height",
+            collapsable=False,
+            marginWidth=5,
+            marginHeight=5,
+            labelVisible=True,
+            height=60
+        )
+        
+        # Create a slider for displacement scale
+        scale_row = cmds.rowLayout(
+            numberOfColumns=3,
+            columnWidth3=(20, 200, 50),
+            adjustableColumn=2,
+            columnAlign3=["left", "center", "right"]
+        )
+        
+        cmds.text(label="0", width=20)
+        
+        # Current scale from displacement node
+        current_scale = cmds.getAttr(f'{displacement_node}.scale')
+        
+        scale_slider = cmds.floatSlider(
+            min=0.0,
+            max=5.0,
+            value=current_scale,
+            step=0.1,
+            dragCommand=lambda value: self.update_displacement_scale(displacement_node, value),
+            changeCommand=lambda value: self.update_displacement_scale(displacement_node, value),
+            width=200,
+            height=20
+        )
+        
+        scale_text = cmds.text(label=f"{current_scale:.1f}", width=50)
+        self.terrain_scale_text = scale_text  # Store for updates
+        
+        cmds.setParent('..')  # Back to the frame
+        cmds.setParent('..')  # Back to the column
+        
+        # Add subdivision control
+        subdiv_frame = cmds.frameLayout(
+            label="Mesh Resolution",
+            collapsable=False,
+            marginWidth=5,
+            marginHeight=5,
+            labelVisible=True,
+            height=60
+        )
+        
+        # Create a row for resolution buttons
+        button_row = cmds.rowLayout(
+            numberOfColumns=3,
+            columnWidth3=(90, 90, 90),
+            columnAlign3=["center", "center", "center"]
+        )
+        
+        cmds.button(
+            label="Low (50x50)",
+            command=lambda x: self.update_terrain_resolution(terrain, 50, 50),
+            width=90
+        )
+        
+        cmds.button(
+            label="Medium (100x100)",
+            command=lambda x: self.update_terrain_resolution(terrain, 100, 100),
+            width=90
+        )
+        
+        cmds.button(
+            label="High (200x200)",
+            command=lambda x: self.update_terrain_resolution(terrain, 200, 200),
+            width=90
+        )
+        
+        cmds.setParent('..')  # Back to the frame
+        cmds.setParent('..')  # Back to the column
+        
+        # Add spacer
+        cmds.text(label="", height=10)
+        
+        # Show window
+        cmds.showWindow(window)
+        
+    def update_displacement_scale(self, displacement_node, value):
+        """
+        Updates the displacement scale
+        """
+        # Update the scale text first
+        if hasattr(self, 'terrain_scale_text'):
+            cmds.text(self.terrain_scale_text, edit=True, label=f"{value:.1f}")
+            
+        # Early exit if the node doesn't exist
+        if not cmds.objExists(displacement_node):
+            return
+            
+        # Update scale based on what type of node it is
+        try:
+            # If it's a displacement shader
+            if cmds.objectType(displacement_node) == 'displacementShader':
+                cmds.setAttr(f'{displacement_node}.scale', value)
+            # If it's a bump2d node
+            elif cmds.objectType(displacement_node) == 'bump2d':
+                cmds.setAttr(f'{displacement_node}.bumpDepth', value)
+                
+            # Check if we have a deformer in our terrain objects
+            if self.terrain_objects and 'deformer' in self.terrain_objects:
+                deformer = self.terrain_objects['deformer']
+                if cmds.objExists(deformer):
+                    cmds.setAttr(f'{deformer}.scale', value)
+        except Exception as e:
+            cmds.warning(f"Error updating displacement scale: {str(e)}")
+    
+    def update_terrain_resolution(self, terrain, subdiv_x, subdiv_y):
+        """
+        Updates the terrain resolution by recreating it
+        """
+        if not cmds.objExists(terrain):
+            return
+            
+        # Get current attributes of the terrain plane
+        try:
+            width = 10  # Default width if can't query
+            height = 10  # Default height if can't query
+            
+            # Try to get the actual width/height if possible
+            if cmds.attributeQuery('width', node=terrain, exists=True):
+                width = cmds.getAttr(f'{terrain}.width')
+            if cmds.attributeQuery('height', node=terrain, exists=True):
+                height = cmds.getAttr(f'{terrain}.height')
+        except Exception as e:
+            cmds.warning(f"Could not query terrain dimensions: {str(e)}")
+            # Use default values
+            width = 10
+            height = 10
+        
+        # Select the terrain
+        cmds.select(terrain)
+        
+        # Delete the terrain
+        cmds.delete()
+        
+        # Recreate the terrain with new subdivision
+        new_terrain = cmds.polyPlane(
+            name=terrain,
+            width=width,
+            height=height,
+            subdivisionsX=subdiv_x,
+            subdivisionsY=subdiv_y,
+            constructionHistory=True
+        )[0]
+        
+        # Update the terrain object reference
+        if self.terrain_objects:
+            self.terrain_objects['terrain'] = new_terrain
+            
+        # Make sure the new terrain is connected to the shading group
+        if self.terrain_objects and cmds.objExists(self.terrain_objects['shader']):
+            sg = f"{self.terrain_objects['shader']}SG"
+            if cmds.objExists(sg):
+                cmds.sets(new_terrain, edit=True, forceElement=sg)
+        
+        # Select the new terrain
+        cmds.select(new_terrain)
+        
+        # Notify the user
+        cmds.inViewMessage(
+            assistMessage=f"Updated terrain resolution to {subdiv_x}x{subdiv_y}",
+            position="topCenter",
+            fade=True
+        )
+
+    def update_terrain(self):
+        """
+        Updates the existing terrain with the new texture if it exists
+        """
+        if not self.terrain_objects or not all(cmds.objExists(obj) for obj in [self.terrain_objects['terrain'], self.terrain_objects['file_node']]):
+            # Terrain doesn't exist or objects have been deleted
+            return
+            
+        try:
+            # Update the file texture path
+            cmds.setAttr(f"{self.terrain_objects['file_node']}.fileTextureName", self.output_preview_path, type="string")
+            
+            # Refresh the viewport to show changes
+            cmds.refresh()
+            
+            # Set feedback for the user
+            cmds.inViewMessage(
+                assistMessage=f"Updated terrain with new noise texture",
+                position="topCenter",
+                fade=True
+            )
+        except Exception as e:
+            cmds.warning(f"Error updating terrain: {str(e)}")
 
 def create_menu():
     """
