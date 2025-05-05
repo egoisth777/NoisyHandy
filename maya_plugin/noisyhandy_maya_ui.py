@@ -31,13 +31,6 @@ except ImportError:
 # Now import project-specific modules
 try:
     from config.noise_config import noise_aliases, ntype_to_params_map
-    from maya_plugin.noisyhandy_maya_noisenode import (
-        create_perlin_example,
-        create_animated_noise_example,
-        create_terrain_example,
-        create_terrain_from_noise,
-        create_noise_node
-    )
 except ImportError:
     cmds.warning("Could not import some modules. Check your installation.")
     # Fallback defaults
@@ -424,6 +417,71 @@ class NoisyHandyUI:
         
         cmds.setParent('..')  # Back to frameLayout
         cmds.setParent('..')  # Back to left_column
+
+        # Add Custom Node Creator section
+        cmds.frameLayout(
+            label="Custom Node Creator", 
+            collapsable=True, 
+            collapse=False,
+            borderStyle="etchedOut", 
+            marginWidth=5, 
+            marginHeight=5,
+            labelVisible=True
+        )
+
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+        
+        # Create a row for the custom node name
+        cmds.rowLayout(
+            numberOfColumns=2,
+            columnWidth2=(120, 220),
+            adjustableColumn=2,
+            columnAlign=(1, 'right')
+        )
+        
+        cmds.text(label="Node Name:", align="right", width=120)
+        self.custom_node_name_field = cmds.textField(
+            text="customNoiseNode",
+            width=220
+        )
+        
+        cmds.setParent('..')  # Back to column layout
+        
+        # Node usage options
+        self.use_for_texturing = cmds.checkBox(
+            label="Use for material texturing", 
+            value=True,
+            align="left",
+            annotation="The node will be configured for standard material connections"
+        )
+        
+        self.use_for_displacement = cmds.checkBox(
+            label="Enable for displacement mapping", 
+            value=True,
+            align="left",
+            annotation="The node will be configured for displacement connections"
+        )
+        
+        self.use_for_deformation = cmds.checkBox(
+            label="Enable for deformation", 
+            value=True,
+            align="left", 
+            annotation="The node will be configured for object deformation usage"
+        )
+        
+        cmds.separator(height=10, style='single')
+        
+        # Create Custom Node button with more prominent styling
+        cmds.button(
+            label="Create Custom Noise Node",
+            command=self.on_create_custom_node,
+            height=40,
+            backgroundColor=[0.2, 0.6, 0.8],  # Blue color
+            annotation="Create a node that can be customized for different uses"
+        )
+        
+        cmds.setParent('..')  # Back to frameLayout
+        cmds.setParent('..')  # Back to left_column
         
         # Add stretchy space at the bottom to push everything up
         cmds.text(label="", height=10)
@@ -625,65 +683,7 @@ class NoisyHandyUI:
         """Handler for blend factor slider change"""
         self.blend_factor = float(value)
         cmds.text(self.blend_value_text, edit=True, label=f"{self.blend_factor:.2f}")
-
-    def on_create_node(self, *args):
-        """Handler for creating a NoisyHandy noise node from the generated texture"""
-        try:
-            # Check if we have a generated output
-            if not hasattr(self, 'output_preview_path') or not self.output_preview_path or not os.path.exists(self.output_preview_path):
-                cmds.warning("Please generate a noise texture first.")
-                return
-            
-            # Create a NoisyHandy node using our node generator
-            return create_noise_node(
-                self.pattern1_value,
-                self.pattern2_value,
-                self.blend_factor,
-                self.output_preview_path,
-                self.pattern1_param_values,
-                self.pattern2_param_values
-            )
-            
-        except Exception as e:
-            # Display error message
-            error_msg = f"Error creating NoisyHandy node: {str(e)}"
-            cmds.warning(error_msg)
-            cmds.confirmDialog(
-                title="Node Creation Error",
-                message=error_msg,
-                button=["OK"],
-                defaultButton="OK"
-            )
-            return None
-    
-    def on_create_terrain(self, *args):
-        """Creates a terrain object using the generated noise as displacement"""
-        try:
-            # Check if we have a generated output
-            if not hasattr(self, 'output_preview_path') or not self.output_preview_path or not os.path.exists(self.output_preview_path):
-                cmds.warning("Please generate a noise texture first.")
-                return None
-                
-            # Create the terrain using our terrain generator
-            return create_terrain_from_noise(
-                self.output_preview_path,
-                self.pattern1_value,
-                self.pattern2_value,
-                self.blend_factor,
-                self.pattern1_param_values, 
-                self.pattern2_param_values
-            )
-            
-        except Exception as e:
-            error_msg = f"Error creating terrain: {str(e)}"
-            cmds.warning(error_msg)
-            cmds.confirmDialog(
-                title="Terrain Creation Error",
-                message=error_msg,
-                button=["OK"],
-                defaultButton="OK"
-            )
-            return None
+ 
 
     def on_generate(self, *args):
         """
@@ -738,35 +738,11 @@ class NoisyHandyUI:
                 defaultButton="OK"
             )
 
-
-def cleanup_ui():
-    """Remove all UI elements created by the plugin"""
-    # Close the main window if it exists
-    if cmds.window(NoisyHandyUI.WINDOW_NAME, exists=True):
-        cmds.deleteUI(NoisyHandyUI.WINDOW_NAME)
-        
-    # Remove the menu if it exists
-    if cmds.menu('NoisyHandyMenu', exists=True):
-        cmds.deleteUI('NoisyHandyMenu')
-        
-    # Clean up any temporary files that might have been created
-    mask_dir = PATHS['mask_dir']
-    try:
-        # Remove temporary files
-        for tmp_file in os.listdir(mask_dir):
-            if tmp_file.startswith('tmp_'):
-                try:
-                    os.remove(os.path.join(mask_dir, tmp_file))
-                except:
-                    pass
-    except Exception as e:
-        cmds.warning(f"Failed to clean up temporary files: {str(e)}")
-    
-    print("NoisyHandy UI elements have been removed")
-
-
 def create_menu():
-    """Create a menu for NoisyHandy in Maya"""
+    """
+    Create a menu for Noisy Handy Plugin in Maya
+    This will contains 
+    """
     # Clean up any existing menu first
     if cmds.menu('NoisyHandyMenu', exists=True):
         cmds.deleteUI('NoisyHandyMenu')
@@ -775,17 +751,14 @@ def create_menu():
     main_menu = cmds.menu('NoisyHandyMenu', label='NoisyHandy', parent='MayaWindow', tearOff=True)
     
     # Menu items for main functions
-    cmds.menuItem(label='Show UI', command=lambda x: show_noisy_handy_ui())
+    cmds.menuItem(label='Open Noise Generator', command=lambda x: show_noisy_handy_ui())
     cmds.menuItem(divider=True)
-    cmds.menuItem(label='Create Noise Node from UI', command=lambda x: NoisyHandyUI().on_create_node())
-    cmds.menuItem(label='Create Terrain from Noise', command=lambda x: NoisyHandyUI().on_create_terrain())
+    
+    # Add the simple terrain generation option
+    cmds.menuItem(divider=True
     
     # Examples submenu
     examples_menu = cmds.menuItem(label='Examples', subMenu=True)
-    cmds.menuItem(label='Basic Perlin Noise Node', command=create_perlin_example)
-    cmds.menuItem(label='Animated Noise', command=create_animated_noise_example)
-    cmds.menuItem(label='Simple Terrain', command=create_terrain_example)
-    cmds.setParent('..', menu=True)  # Go back to main menu
     
     # Help/Info submenu
     help_menu = cmds.menuItem(label='Help', subMenu=True)
@@ -816,16 +789,22 @@ def show_user_guide(*args):
     2. Creating Nodes:
        - After generating a noise texture, click "Create Noise Node"
        - The node can be connected to materials, displacement, etc.
+       - Use "Create Custom Noise Node" for specialized setups
        
     3. Creating Terrain:
        - After generating a noise texture, use "Create Terrain from Noise" 
          from the NoisyHandy menu
        - This creates a terrain with the noise applied as displacement
        
-    4. Animation:
+    4. Object Deformation:
+       - Use the "Deformable Object" example from the Examples menu
+       - Or create a Custom Noise Node with "Enable for deformation" checked
+       - Connect the node to a displacement deformer as shown in the instructions
+       
+    5. Animation:
        - Enable "animateNoise" on the node
        - Set animation speed and other parameters
-       - The noise will change over time
+       - The noise will change over time, animating textures and deformations
     """
     
     cmds.confirmDialog(
@@ -835,6 +814,91 @@ def show_user_guide(*args):
         defaultButton='OK'
     )
 
+def update_slider_text(text_field, value):
+    """
+    Update text field with the slider value
+    """
+    # Format float values to 2 decimal places
+    if isinstance(value, float):
+        formatted_value = f"{value:.2f}"
+    else:
+        formatted_value = str(value)
+    cmds.textField(text_field, edit=True, text=formatted_value)
+
+
+def update_text_slider(slider, value, min_val, max_val, value_type):
+    """
+    Update slider with the text field value
+    """
+    try:
+        # Parse and clamp the value
+        parsed_value = value_type(value)
+        clamped_value = max(min_val, min(max_val, parsed_value))
+        
+        # Set the slider value
+        cmds.floatSlider(slider, edit=True, value=clamped_value)
+        
+        # If the value was clamped, update the text field
+        if parsed_value != clamped_value:
+            # Determine the corresponding text field name
+            if slider == "frequencySlider":
+                text_field = "frequencyValue"
+            elif slider == "octavesSlider":
+                text_field = "octavesValue"
+            elif slider == "persistenceSlider":
+                text_field = "persistenceValue"
+            else:
+                return
+                
+            if value_type == float:
+                formatted_value = f"{clamped_value:.2f}"
+            else:
+                formatted_value = str(clamped_value)
+            cmds.textField(text_field, edit=True, text=formatted_value)
+    except ValueError:
+        # If the entered value can't be parsed, reset to current slider value
+        current_value = cmds.floatSlider(slider, query=True, value=True)
+        
+        # Determine the corresponding text field name
+        if slider == "frequencySlider":
+            text_field = "frequencyValue"
+        elif slider == "octavesSlider":
+            text_field = "octavesValue"
+        elif slider == "persistenceSlider":
+            text_field = "persistenceValue"
+        else:
+            return
+            
+        if value_type == float:
+            formatted_value = f"{current_value:.2f}"
+        else:
+            formatted_value = str(int(current_value))
+        cmds.textField(text_field, edit=True, text=formatted_value)
+
+def cleanup_ui():
+    """Remove all UI elements created by the plugin"""
+    # Close the main window if it exists
+    if cmds.window(NoisyHandyUI.WINDOW_NAME, exists=True):
+        cmds.deleteUI(NoisyHandyUI.WINDOW_NAME)
+        
+    # Remove the menu if it exists
+    if cmds.menu('NoisyHandyMenu', exists=True):
+        cmds.deleteUI('NoisyHandyMenu')
+        
+    # Clean up any temporary files that might have been created
+    mask_dir = PATHS['mask_dir']
+    try:
+        # Remove temporary files
+        for tmp_file in os.listdir(mask_dir):
+            if tmp_file.startswith('tmp_'):
+                try:
+                    os.remove(os.path.join(mask_dir, tmp_file))
+                except:
+                    pass
+    except Exception as e:
+        cmds.warning(f"Failed to clean up temporary files: {str(e)}")
+    
+    print("NoisyHandy UI elements have been removed")
 
 # Function to create and show the UI
 def show_noisy_handy_ui():

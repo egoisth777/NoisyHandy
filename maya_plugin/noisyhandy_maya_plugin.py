@@ -53,6 +53,7 @@ def setup_dependencies() -> bool:
         print(f"[✓]CUDA is Available: {torch.cuda.is_available()}")
         print("END SETTING UP DEPENDENCY")
         print("==========================")
+        print("<<<<<<<<<<<<<<<<<<<<<<<<<<")
         return True
     except Exception as e:
         print(f"[!] Failed to import torch: {e}")
@@ -316,12 +317,14 @@ def initializePlugin(mobject):
             NoisyHandyInferenceCmd.syntaxCreator
         )
         
+        # Register node with texture classification for Hypershade visibility
         mplugin.registerNode(
             NoisyHandyNode.typeName,
             NoisyHandyNode.id,
             NoisyHandyNode.nodeCreator,
             NoisyHandyNode.nodeInitializer,
-            OpenMayaMPx.MPxNode.kDependNode
+            OpenMayaMPx.MPxNode.kDependNode,
+            "texture/2d"  # This classification makes it visible in Hypershade
         )
         
         mplugin.registerCommand(
@@ -333,12 +336,14 @@ def initializePlugin(mobject):
         # Create the UI when plugin is loaded
         try:
             import noisyhandy_maya_ui
+            # Add custom example functions for direct access
+            from noisyhandy_maya_noisenode import create_simple_terrain_example
             noisyhandy_maya_ui.create_menu()  # Create menu instead of showing UI directly
-            print("NoisyHandy menu created successfully")
+            
         except Exception as e:
             OpenMaya.MGlobal.displayWarning(f"Error creating UI menu: {str(e)}")
-            
         print(f"{PLUGIN_NAME} v{PLUGIN_VERSION} loaded successfully")
+    
     except:
         sys.stderr.write(f"Failed to register command: {NoisyHandyInferenceCmd.command_name}\n")
         raise
