@@ -394,6 +394,14 @@ class NoisyHandyUI:
             backgroundColor=[0.0, 0.4, 0.8]  # Blue color
         )
         
+        # Add the new Save Noise Texture button
+        cmds.button(
+            label="Save Noise Texture", 
+            command=self.on_save_noise_texture,
+            height=45,
+            backgroundColor=[0.7, 0.7, 0.7]  # Gray color
+        )
+        
         # Add stretchy space at the bottom to push everything up
         cmds.text(label="", height=10)
         
@@ -1114,6 +1122,67 @@ class NoisyHandyUI:
             )
         except Exception as e:
             cmds.warning(f"Error updating terrain: {str(e)}")
+    
+    def on_save_noise_texture(self, *args):
+        """
+        Handler for saving the generated noise texture to a user-specified location
+        """
+        # Check if a texture has been generated
+        if not hasattr(self, 'output_preview_path') or not self.output_preview_path:
+            cmds.warning("No texture has been generated yet. Please generate a texture first.")
+            cmds.confirmDialog(
+                title="No Texture Available",
+                message="No texture has been generated yet. Please click 'Generate' first to create a texture.",
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return
+            
+        # Check if the texture file exists
+        if not os.path.exists(self.output_preview_path):
+            cmds.warning(f"Generated texture file not found: {self.output_preview_path}")
+            cmds.confirmDialog(
+                title="Texture Not Found",
+                message="The generated texture file could not be found. Please regenerate the texture.",
+                button=["OK"],
+                defaultButton="OK"
+            )
+            return
+        
+        # Show file dialog to get save location
+        file_path = cmds.fileDialog2(
+            fileMode=0,  # Save mode
+            caption="Save Noise Texture",
+            fileFilter="PNG Files (*.png);;JPEG Files (*.jpg);;TIFF Files (*.tiff);;All Files (*.*)",
+            dialogStyle=2  # Use OS native dialog
+        )
+        
+        if file_path:
+            selected_path = file_path[0]
+            try:
+                # Make sure the file has an extension
+                if not os.path.splitext(selected_path)[1]:
+                    selected_path += ".png"  # Add default extension
+                
+                # Copy the generated texture to the selected location
+                cmds.sysFile(self.output_preview_path, copy=selected_path)
+                
+                # Display success message
+                cmds.inViewMessage(
+                    assistMessage=f"Saved noise texture to: {selected_path}",
+                    position="topCenter",
+                    fade=True
+                )
+                
+            except Exception as e:
+                error_msg = f"Error saving texture: {str(e)}"
+                cmds.warning(error_msg)
+                cmds.confirmDialog(
+                    title="Save Error",
+                    message=error_msg,
+                    button=["OK"],
+                    defaultButton="OK"
+                )
 
 def create_menu():
     """
