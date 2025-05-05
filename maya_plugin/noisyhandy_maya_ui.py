@@ -10,13 +10,13 @@ import json
 import tempfile
 
 # Add parent directory to path to allow imports from sibling packages
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # Get paths from the plugin itself
 from noisyhandy_config import PATHS
 from PIL import Image
-    
+
 # Now import project-specific modules
 try:
     from config.noise_config import noise_aliases, ntype_to_params_map
@@ -49,8 +49,23 @@ class NoisyHandyUI:
 
     # Define patterns and paths dynamically
     NOISE_PATTERNS = ["damas", "galvanic", "cells1", "cells4", "perlin", "gaussian", "voro", "liquid", "fibers", "micro", "rust"]
-    MASK_SHAPES = [os.path.splitext(f)[0] for f in os.listdir(MASK_DIR) if f.endswith('.png') and not f.startswith('tmp')]
-
+    
+    # Initialize mask shapes safely
+    try:
+        # Check if mask directory exists
+        if os.path.exists(PATHS['mask_dir']):
+            MASK_SHAPES = [os.path.splitext(f)[0] for f in os.listdir(PATHS['mask_dir']) 
+                           if f.endswith('.png') and not f.startswith('tmp')]
+            if not MASK_SHAPES:  # If no masks found
+                print(f"Warning: No mask files found in {PATHS['mask_dir']}")
+                MASK_SHAPES = ["uniform"]  # Default fallback
+        else:
+            print(f"Warning: Mask directory does not exist: {PATHS['mask_dir']}")
+            MASK_SHAPES = ["uniform"]  # Default fallback
+    except Exception as e:
+        print(f"Error initializing mask shapes: {str(e)}")
+        MASK_SHAPES = ["uniform"]  # Default fallback
+    
     NOISE_PARAMETERS = {}
 
     # Paths for preview images (to be populated)
@@ -60,9 +75,18 @@ class NoisyHandyUI:
         # Ensure the plugin is loaded before attempting to use any of its commands
         self._ensure_plugin_loaded()
         
-        self.pattern1_value = self.NOISE_PATTERNS[0]
-        self.pattern2_value = self.NOISE_PATTERNS[1]
-        self.mask_shape_value = self.MASK_SHAPES[0]
+        self.pattern1_value = "galvanic"  # Default to galvanic
+        self.pattern2_value = "damas"     # Default to damas
+        
+        # Set default mask - choose siggraph-logo if available, otherwise first in list or uniform
+        if "siggraph-logo" in self.MASK_SHAPES:
+            self.mask_shape_value = "siggraph-logo"
+        elif len(self.MASK_SHAPES) > 0:
+            self.mask_shape_value = self.MASK_SHAPES[0]
+        else:
+            self.mask_shape_value = "uniform"
+            
+        print(f"Using default mask: {self.mask_shape_value}")
         self.blend_factor = 0.5
 
         # File paths for generated previews
@@ -89,8 +113,16 @@ class NoisyHandyUI:
         self.pattern1_param_values = {}
         self.pattern2_param_values = {}
 
+        # Initialize noise parameters
         for noise_pattern in self.NOISE_PATTERNS:
             self.NOISE_PARAMETERS[noise_pattern] = ntype_to_params_map.get(noise_aliases.get(noise_pattern, noise_pattern), [])
+        
+        # Initialize parameter values with default values of 0.5
+        for param in self.NOISE_PARAMETERS.get(self.pattern1_value, []):
+            self.pattern1_param_values[param] = 0.5
+            
+        for param in self.NOISE_PARAMETERS.get(self.pattern2_value, []):
+            self.pattern2_param_values[param] = 0.5
     
     def _ensure_plugin_loaded(self):
         """Make sure the NoisyHandy plugin is loaded before accessing its commands"""
@@ -217,6 +249,8 @@ class NoisyHandyUI:
         )
         for pattern in self.NOISE_PATTERNS:
             cmds.menuItem(label=pattern)
+        # Set the default value to galvanic
+        cmds.optionMenu(self.pattern1_menu, edit=True, value=self.pattern1_value)
         cmds.setParent('..')
 
         # Pattern 1 parameters container
@@ -250,6 +284,8 @@ class NoisyHandyUI:
         )
         for pattern in self.NOISE_PATTERNS:
             cmds.menuItem(label=pattern)
+        # Set the default value to damas
+        cmds.optionMenu(self.pattern2_menu, edit=True, value=self.pattern2_value)
         cmds.setParent('..')
 
         # Pattern 2 parameters container
@@ -283,6 +319,8 @@ class NoisyHandyUI:
         )
         for shape in self.MASK_SHAPES:
             cmds.menuItem(label=shape)
+        # Set the default value to siggraph icon
+        cmds.optionMenu(self.mask_shape_menu, edit=True, value=self.mask_shape_value)
         cmds.setParent('..')
 
         # Mask Upload Button
@@ -431,9 +469,20 @@ class NoisyHandyUI:
         cmds.showWindow(window)
 
     def resize_and_save(self, input_path, output_path, size=(350, 350)):
-        im = Image.open(input_path)
-        im = im.resize(size, Image.Resampling.LANCZOS)
-        im.save(output_path)
+        """Resize an image and save it to the specified path"""
+        try:
+            print(f"Opening image from: {input_path}")
+            im = Image.open(input_path)
+            print(f"Resizing image to: {size}")
+            im = im.resize(size, Image.Resampling.LANCZOS)
+            print(f"Saving image to: {output_path}")
+            im.save(output_path)
+            print(f"Image saved successfully")
+        except Exception as e:
+            error_msg = f"Error processing image: {str(e)}"
+            print(error_msg)
+            cmds.warning(error_msg)
+            raise
 
     def update_single_noise_preview(self, pattern, pattern_image, params, size=(350, 350)):
         try:
@@ -519,19 +568,53 @@ class NoisyHandyUI:
     def on_mask_shape_change(self, value):
         """Handler for mask shape selection change"""
         self.mask_shape_value = value
+        print(f"Mask shape selected: {value}")
+        
         mask_path = os.path.join(self.MASK_DIR, self.mask_shape_value + '.png')
+        print(f"Loading mask from: {mask_path}")
+        print(f"Mask file exists: {os.path.exists(mask_path)}")
 
         if os.path.exists(mask_path):
-            tmp_path = os.path.join(self.MASK_DIR, 'tmp_mask.png')
-            self.resize_and_save(mask_path, tmp_path)
+            try:
+                tmp_path = os.path.join(self.MASK_DIR, 'tmp_mask.png')
+                print(f"Resizing mask to: {tmp_path}")
+                self.resize_and_save(mask_path, tmp_path)
+                print(f"Mask resized successfully")
 
-            # Update the UI image control with the new image
-            cmds.image(self.blend_map_image, edit=True, image=tmp_path)
-        
-            # Store the path for future reference
-            self.mask_preview_path = mask_path
+                # Update the UI image control with the new image
+                print(f"Updating UI blend map image with: {tmp_path}")
+                cmds.image(self.blend_map_image, edit=True, image=tmp_path)
+                print(f"UI updated successfully")
+            
+                # Store the path for future reference
+                self.mask_preview_path = mask_path
+                print(f"Stored mask preview path: {self.mask_preview_path}")
+            except Exception as e:
+                error_msg = f"Error processing mask image: {str(e)}"
+                cmds.warning(error_msg)
+                cmds.confirmDialog(
+                    title="Mask Loading Error",
+                    message=error_msg,
+                    button=["OK"],
+                    defaultButton="OK"
+                )
         else:
-            cmds.warning(f"Image file not found: {mask_path}")
+            error_msg = f"Mask image file not found: {mask_path}"
+            cmds.warning(error_msg)
+            # Try to fall back to uniform mask
+            uniform_path = os.path.join(self.MASK_DIR, 'uniform.png')
+            if os.path.exists(uniform_path):
+                print(f"Falling back to uniform mask: {uniform_path}")
+                self.mask_shape_value = "uniform"
+                cmds.optionMenu(self.mask_shape_menu, edit=True, value="uniform")
+                self.on_mask_shape_change("uniform")
+            else:
+                cmds.confirmDialog(
+                    title="Mask Not Found",
+                    message=error_msg,
+                    button=["OK"],
+                    defaultButton="OK"
+                )
     
     def on_blend_change(self, value):
         """Handler for blend factor slider change"""
@@ -753,9 +836,75 @@ def cleanup_ui():
     print("NoisyHandy UI elements have been removed")
 
 # Function to create and show the UI
-def show_noisy_handy_ui():
-    ui = NoisyHandyUI()
-    ui.create_ui()
+def show_noisy_handy_ui(*args):
+    try:
+        # Create UI instance and window
+        ui = NoisyHandyUI()
+        ui.create_ui()
+        
+        # Initialize the previews
+        try:
+            print("Starting to initialize previews...")
+            
+            # Generate initial pattern 1 preview
+            print(f"Generating preview for pattern 1: {ui.pattern1_value}")
+            ui.update_single_noise_preview(ui.pattern1_value, ui.pattern1_image, ui.pattern1_param_values)
+            print(f"Successfully generated preview for pattern 1: {ui.pattern1_value}")
+            
+            # Generate initial pattern 2 preview
+            print(f"Generating preview for pattern 2: {ui.pattern2_value}")
+            ui.update_single_noise_preview(ui.pattern2_value, ui.pattern2_image, ui.pattern2_param_values)
+            print(f"Successfully generated preview for pattern 2: {ui.pattern2_value}")
+            
+            # Load initial mask preview if the directory exists
+            print(f"Loading mask: {ui.mask_shape_value} from {ui.MASK_DIR}")
+            
+            # Check if mask directory exists
+            if os.path.exists(ui.MASK_DIR):
+                mask_path = os.path.join(ui.MASK_DIR, ui.mask_shape_value + '.png')
+                print(f"Full mask path: {mask_path}")
+                print(f"Does mask file exist: {os.path.exists(mask_path)}")
+                
+                if os.path.exists(mask_path):
+                    ui.on_mask_shape_change(ui.mask_shape_value)
+                    print("Successfully loaded mask preview")
+                else:
+                    print(f"Warning: Mask file does not exist: {mask_path}")
+            else:
+                print(f"Warning: Mask directory does not exist: {ui.MASK_DIR}")
+                # Try to create the directory
+                try:
+                    os.makedirs(ui.MASK_DIR, exist_ok=True)
+                    print(f"Created mask directory: {ui.MASK_DIR}")
+                except Exception as e:
+                    print(f"Failed to create mask directory: {str(e)}")
+            
+            print("Previews initialized successfully")
+        except Exception as e:
+            error_message = f"Failed to initialize previews: {str(e)}"
+            stack_trace = cmds.stackTrace(showLineNumber=True)
+            cmds.warning(error_message)
+            cmds.warning(f"Stack trace: {stack_trace}")
+            
+            # Show dialog with error details
+            cmds.confirmDialog(
+                title="Preview Initialization Error",
+                message=f"{error_message}\n\nCheck script editor for details.",
+                button=["OK"],
+                defaultButton="OK"
+            )
+        
+        return ui
+    except Exception as e:
+        error_message = f"Failed to create UI: {str(e)}"
+        cmds.warning(error_message)
+        cmds.confirmDialog(
+            title="UI Creation Error",
+            message=error_message,
+            button=["OK"],
+            defaultButton="OK"
+        )
+        return None
 
 
 # Only create the UI when this script is run directly (not when imported)
