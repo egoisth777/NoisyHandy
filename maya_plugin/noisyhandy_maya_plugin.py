@@ -16,7 +16,6 @@ import maya.OpenMaya as OpenMaya
 import maya.OpenMayaMPx as OpenMayaMPx 
 
 # Import Noise Node Related settings
-from noisyhandy_maya_noisenode import CreateNoisyHandyNodeCmd, NoisyHandyNode, NOISY_HANDY_NODE_TYPE, NOISY_HANDY_NODE_ID
 import noisyhandy_maya_ui
 from noisyhandy_config import PATHS, PLUGIN_VERSION, PLUGIN_NAME
 
@@ -317,29 +316,10 @@ def initializePlugin(mobject):
             NoisyHandyInferenceCmd.syntaxCreator
         )
         
-        # Register node with texture classification for Hypershade visibility
-        mplugin.registerNode(
-            NoisyHandyNode.typeName,
-            NoisyHandyNode.id,
-            NoisyHandyNode.nodeCreator,
-            NoisyHandyNode.nodeInitializer,
-            OpenMayaMPx.MPxNode.kDependNode,
-            "texture/2d"  # This classification makes it visible in Hypershade
-        )
-        
-        mplugin.registerCommand(
-            CreateNoisyHandyNodeCmd.command_name,
-            CreateNoisyHandyNodeCmd.cmdCreator,
-            CreateNoisyHandyNodeCmd.syntaxCreator
-        )
-        
         # Create the UI when plugin is loaded
         try:
             import noisyhandy_maya_ui
-            # Add custom example functions for direct access
-            from noisyhandy_maya_noisenode import create_simple_terrain_example
             noisyhandy_maya_ui.create_menu()  # Create menu instead of showing UI directly
-            
         except Exception as e:
             OpenMaya.MGlobal.displayWarning(f"Error creating UI menu: {str(e)}")
         print(f"{PLUGIN_NAME} v{PLUGIN_VERSION} loaded successfully")
@@ -353,120 +333,30 @@ def uninitializePlugin(mobject):
     Clean up when the plugin is unloaded
     """
     mplugin = OpenMayaMPx.MFnPlugin(mobject)
-    
+        
+    # Deregister Maya Command
+    mplugin.deregisterCommand(NoisyHandyInferenceCmd.command_name)
+        
+    # Clean up UI elements
     try:
-        # First find and clean up any existing noise nodes
-        try:
-            # Find all NoisyHandy nodes
-            noisy_nodes = cmds.ls(type=NOISY_HANDY_NODE_TYPE)
-            
-            if noisy_nodes and len(noisy_nodes) > 0:
-                print(f"Found {len(noisy_nodes)} NoisyHandy nodes to clean up.")
-                
-                # Get connected place2d nodes
-                place2d_nodes = []
-                for node in noisy_nodes:
-                    # Find any connected place2dTexture nodes
-                    connected_nodes = cmds.listConnections(node, type="place2dTexture")
-                    if connected_nodes:
-                        place2d_nodes.extend(connected_nodes)
-                
-                # Get all the connected shading networks to clean up later
-                connected_shaders = []
-                connected_sg_sets = []
-                
-                for node in noisy_nodes:
-                    connections = cmds.listConnections(f"{node}.outColor") or []
-                    for conn in connections:
-                        conn_type = cmds.nodeType(conn)
-                        if conn_type in ["lambert", "blinn", "phong", "standardSurface", "displacementShader", "bump3d"]:
-                            connected_shaders.append(conn)
-                        elif conn_type == "shadingEngine":
-                            connected_sg_sets.append(conn)
-                
-                # Delete the NoisyHandy nodes - this disconnects them from the network
-                cmds.delete(noisy_nodes)
-                print(f"Deleted {len(noisy_nodes)} NoisyHandy nodes.")
-                
-                # Clean up place2d nodes that were connected to our nodes
-                if place2d_nodes:
-                    # Remove duplicates
-                    place2d_nodes = list(set(place2d_nodes))
-                    # Check if each node still exists (might be deleted as part of node deletion)
-                    existing_place2d = [node for node in place2d_nodes if cmds.objExists(node)]
-                    if existing_place2d:
-                        cmds.delete(existing_place2d)
-                        print(f"Deleted {len(existing_place2d)} place2dTexture nodes.")
-                
-                # Clean up any shading networks that might not be deleted automatically
-                if connected_shaders:
-                    # Remove duplicates and check existence
-                    connected_shaders = list(set(connected_shaders))
-                    existing_shaders = [node for node in connected_shaders if cmds.objExists(node)]
-                    if existing_shaders:
-                        # Only delete shaders that have no other connections
-                        for shader in existing_shaders[:]:  # Copy the list to avoid modification during iteration
-                            # Check if this shader has any inputs other than from our deleted nodes
-                            has_other_inputs = False
-                            inputs = cmds.listConnections(shader, destination=False, source=True) or []
-                            for input_node in inputs:
-                                if input_node not in noisy_nodes and cmds.objExists(input_node):
-                                    has_other_inputs = True
-                                    break
-                            
-                            # Only delete if it has no other inputs
-                            if not has_other_inputs and cmds.objExists(shader):
-                                cmds.delete(shader)
-                                print(f"Deleted orphaned shader: {shader}")
-                
-                # Clean up any shading groups that might be orphaned
-                if connected_sg_sets:
-                    connected_sg_sets = list(set(connected_sg_sets))
-                    existing_sg = [node for node in connected_sg_sets if cmds.objExists(node)]
-                    if existing_sg:
-                        for sg in existing_sg[:]:  # Copy the list to avoid modification during iteration
-                            # Check if this shading group has any surface shader connected
-                            has_surface_shader = cmds.listConnections(f"{sg}.surfaceShader", destination=False, source=True)
-                            # Delete only if it has no surface shader
-                            if not has_surface_shader and cmds.objExists(sg):
-                                cmds.delete(sg)
-                                print(f"Deleted orphaned shading group: {sg}")
-                
-                print("Cleanup of NoisyHandy nodes and related networks completed.")
-            else:
-                print("No NoisyHandy nodes found to clean up.")
-        except Exception as e:
-            print(f"Error during node cleanup: {str(e)}")
-            # Continue with deregistration even if cleanup fails
-        
-        # Now deregister the commands and node types
-        mplugin.deregisterCommand(NoisyHandyInferenceCmd.command_name)
-        mplugin.deregisterNode(NoisyHandyNode.id)
-        mplugin.deregisterCommand(CreateNoisyHandyNodeCmd.command_name)
-        
-        # Clean up UI elements
-        try:
-            import noisyhandy_maya_ui
-            noisyhandy_maya_ui.cleanup_ui()
-        except Exception as e:
-            OpenMaya.MGlobal.displayWarning(f"Error cleaning up UI: {str(e)}")
-        
-        # Clean up temporary files in temp_output directory
-        try:
-            temp_output_dir = PATHS['temp_output_dir']
-            if os.path.exists(temp_output_dir):
-                for tmp_file in os.listdir(temp_output_dir):
-                    if tmp_file.startswith('tmp_'):
-                        try:
-                            file_path = os.path.join(temp_output_dir, tmp_file)
-                            os.remove(file_path)
-                            print(f"Deleted temporary file: {file_path}")
-                        except Exception as file_e:
-                            print(f"Failed to delete temporary file {tmp_file}: {str(file_e)}")
-        except Exception as e:
-            OpenMaya.MGlobal.displayWarning(f"Error cleaning up temporary files: {str(e)}")
-        
-        OpenMaya.MGlobal.displayInfo(f"{PLUGIN_NAME} v{PLUGIN_VERSION} unloaded successfully")
+        import noisyhandy_maya_ui
+        noisyhandy_maya_ui.cleanup_ui()
     except Exception as e:
-        sys.stderr.write(f"Error during plugin unload: {str(e)}\n")
-        raise
+        OpenMaya.MGlobal.displayWarning(f"Error cleaning up UI: {str(e)}")
+    
+    # Clean up temporary files in temp_output directory
+    try:
+        temp_output_dir = PATHS['temp_output_dir']
+        if os.path.exists(temp_output_dir):
+            for tmp_file in os.listdir(temp_output_dir):
+                if tmp_file.startswith('tmp_'):
+                    try:
+                        file_path = os.path.join(temp_output_dir, tmp_file)
+                        os.remove(file_path)
+                        print(f"Deleted temporary file: {file_path}")
+                    except Exception as file_e:
+                        print(f"Failed to delete temporary file {tmp_file}: {str(file_e)}")
+    except Exception as e:
+        OpenMaya.MGlobal.displayWarning(f"Error cleaning up temporary files: {str(e)}")
+        
+    OpenMaya.MGlobal.displayInfo(f"{PLUGIN_NAME} v{PLUGIN_VERSION} unloaded successfully")

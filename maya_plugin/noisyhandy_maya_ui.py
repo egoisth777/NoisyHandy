@@ -1,5 +1,7 @@
 ################################################################### IMPORT #######
 ##################################################################################
+
+
 import maya.cmds as cmds
 import maya.mel as mel
 import os
@@ -10,23 +12,10 @@ import tempfile
 # Add parent directory to path to allow imports from sibling packages
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
 # Get paths from the plugin itself
 from noisyhandy_config import PATHS
-
-# Configure PIL
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
-    cmds.warning("PIL (Python Imaging Library) not found. Some functionality will be limited.")
-    # Define a minimal Image class as fallback
-    class Image:
-        @staticmethod
-        def open(path):
-            return None
-        class Resampling:
-            LANCZOS = 1
+from PIL import Image
     
 # Now import project-specific modules
 try:
@@ -36,6 +25,9 @@ except ImportError:
     # Fallback defaults
     noise_aliases = {}
     ntype_to_params_map = {}
+
+from config.noise_config import noise_aliases, ntype_to_params_map
+
 ##################################################################################
 ################################################################### END IMPORT ###
 ##################################################################################
@@ -44,7 +36,9 @@ except ImportError:
 
 # UI CLASS COMPONENT
 class NoisyHandyUI:
-    """UI for the NoisyHandy Maya plugin"""
+    """
+    UI for the NoisyHandy Maya plugin
+    """
     
     WINDOW_NAME = "NoisyHandyUI"
     WINDOW_TITLE = "NoisyHandy"
@@ -334,154 +328,16 @@ class NoisyHandyUI:
         cmds.setParent('..')  # Back to frameLayout
         cmds.setParent('..')  # Back to columnLayout
         
-        # Add spacer before buttons
+        # Add spacer before Generate button
         cmds.separator(height=20, style='none')
-        
-        # Create a row layout for the buttons
-        buttons_row = cmds.rowLayout(
-            numberOfColumns=3, 
-            columnWidth3=(115, 115, 115), 
-            adjustableColumn=2,
-            columnAlign=[1, "center"],
-            parent=left_column
-        )
         
         # Generate button
         cmds.button(
             label="Generate", 
             command=self.on_generate,
             height=45,
-            backgroundColor=[1.0, 0.5, 0.0],  # Orange color
-            parent=buttons_row
+            backgroundColor=[1.0, 0.5, 0.0]  # Orange color
         )
-        
-        # Create Noise Node button
-        cmds.button(
-            label="Create Noise Node", 
-            command=self.on_create_node,
-            height=45,
-            backgroundColor=[0.2, 0.6, 0.8],  # Blue color
-            parent=buttons_row
-        )
-        
-        # Add terrain generation button
-        cmds.button(
-            label="Create Terrain", 
-            command=self.on_create_terrain,
-            height=45,
-            backgroundColor=[0.3, 0.8, 0.3],  # Green color
-            parent=buttons_row
-        )
-        
-        cmds.setParent('..')  # Back to left_column
-
-        # Add a section for node operations with explanations
-        cmds.frameLayout(
-            label="Node Creation Tips", 
-            collapsable=True, 
-            collapse=True,
-            borderStyle="etchedOut", 
-            marginWidth=5, 
-            marginHeight=5,
-            labelVisible=True
-        )
-
-        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
-        
-        cmds.text(
-            label="1. Generate noise using the Generate button first",
-            align="left"
-        )
-        
-        cmds.text(
-            label="2. Click 'Create Noise Node' to create a Maya node",
-            align="left"
-        )
-        
-        cmds.text(
-            label="3. Connect the node to materials or displacements",
-            align="left"
-        )
-        
-        cmds.text(
-            label="4. Use 'Create Terrain' for quick terrain visualization",
-            align="left"
-        )
-        
-        cmds.separator(height=10, style='single')
-        
-        cmds.text(
-            label="The created node can be used like any Maya texture node",
-            align="left"
-        )
-        
-        cmds.setParent('..')  # Back to frameLayout
-        cmds.setParent('..')  # Back to left_column
-
-        # Add Custom Node Creator section
-        cmds.frameLayout(
-            label="Custom Node Creator", 
-            collapsable=True, 
-            collapse=False,
-            borderStyle="etchedOut", 
-            marginWidth=5, 
-            marginHeight=5,
-            labelVisible=True
-        )
-
-        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
-        
-        # Create a row for the custom node name
-        cmds.rowLayout(
-            numberOfColumns=2,
-            columnWidth2=(120, 220),
-            adjustableColumn=2,
-            columnAlign=(1, 'right')
-        )
-        
-        cmds.text(label="Node Name:", align="right", width=120)
-        self.custom_node_name_field = cmds.textField(
-            text="customNoiseNode",
-            width=220
-        )
-        
-        cmds.setParent('..')  # Back to column layout
-        
-        # Node usage options
-        self.use_for_texturing = cmds.checkBox(
-            label="Use for material texturing", 
-            value=True,
-            align="left",
-            annotation="The node will be configured for standard material connections"
-        )
-        
-        self.use_for_displacement = cmds.checkBox(
-            label="Enable for displacement mapping", 
-            value=True,
-            align="left",
-            annotation="The node will be configured for displacement connections"
-        )
-        
-        self.use_for_deformation = cmds.checkBox(
-            label="Enable for deformation", 
-            value=True,
-            align="left", 
-            annotation="The node will be configured for object deformation usage"
-        )
-        
-        cmds.separator(height=10, style='single')
-        
-        # Create Custom Node button with more prominent styling
-        cmds.button(
-            label="Create Custom Noise Node",
-            command=self.on_create_custom_node,
-            height=40,
-            backgroundColor=[0.2, 0.6, 0.8],  # Blue color
-            annotation="Create a node that can be customized for different uses"
-        )
-        
-        cmds.setParent('..')  # Back to frameLayout
-        cmds.setParent('..')  # Back to left_column
         
         # Add stretchy space at the bottom to push everything up
         cmds.text(label="", height=10)
@@ -575,10 +431,9 @@ class NoisyHandyUI:
         cmds.showWindow(window)
 
     def resize_and_save(self, input_path, output_path, size=(350, 350)):
-        if PIL_AVAILABLE:
-            im = Image.open(input_path)
-            im = im.resize(size, Image.Resampling.LANCZOS)
-            im.save(output_path)
+        im = Image.open(input_path)
+        im = im.resize(size, Image.Resampling.LANCZOS)
+        im.save(output_path)
 
     def update_single_noise_preview(self, pattern, pattern_image, params, size=(350, 350)):
         try:
@@ -590,9 +445,8 @@ class NoisyHandyUI:
                 maskPath = '',
                 blendFactor = 0
             )
-
             cmds.image(pattern_image, edit=True, image=result)
-
+            
         except Exception as e:
             cmds.warning(f"Error generating noise: {str(e)}")
             raise
@@ -741,7 +595,6 @@ class NoisyHandyUI:
 def create_menu():
     """
     Create a menu for Noisy Handy Plugin in Maya
-    This will contains 
     """
     # Clean up any existing menu first
     if cmds.menu('NoisyHandyMenu', exists=True):
@@ -754,19 +607,18 @@ def create_menu():
     cmds.menuItem(label='Open Noise Generator', command=lambda x: show_noisy_handy_ui())
     cmds.menuItem(divider=True)
     
-    # Add the simple terrain generation option
-    cmds.menuItem(divider=True
-    
     # Examples submenu
     examples_menu = cmds.menuItem(label='Examples', subMenu=True)
     
     # Help/Info submenu
     help_menu = cmds.menuItem(label='Help', subMenu=True)
+    
     cmds.menuItem(label='About NoisyHandy', command=lambda x: cmds.confirmDialog(
         title='About NoisyHandy',
         message='NoisyHandy Plugin\nVersion 1.0.1\n\nA Maya plugin for generating custom noise textures.',
         button='OK'
     ))
+
     cmds.menuItem(label='User Guide', command=show_user_guide)
     cmds.setParent('..', menu=True)  # Go back to main menu
     
